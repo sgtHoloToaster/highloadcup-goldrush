@@ -40,8 +40,7 @@ let main argv =
     Console.WriteLine("start")
     let urlEnv = Environment.GetEnvironmentVariable("ADDRESS")
     Console.WriteLine("host: " + urlEnv)
-    let url = new Uri(urlEnv + ":8000")
-    let client = new Client.Client(url.ToString())
+    let client = new Client.Client(urlEnv + ":8000/")
     game client |> Async.RunSynchronously |> ignore
     Console.WriteLine("ended")
     0 // return an integer exit code
