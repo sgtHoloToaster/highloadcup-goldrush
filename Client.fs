@@ -26,10 +26,9 @@ let inline processResponse<'T> (response: HttpResponseMessage) =
                 return Error response.StatusCode
     }
 
-type Client() =
-    let baseUrl = "here will be url"
+type Client(baseUrl) =
     let client = new HttpClient()
-    let mutable _license = { DigAllowed = 0; DigUsed = 0; Id = None }
+    member val License = { DigAllowed = 0; DigUsed = 0; Id = None } with get, set
 
     member private this.Post<'T, 'T1> (url: string) (body: 'T1) = 
         async {
@@ -77,6 +76,6 @@ type Client() =
         async {
             let! result = this.PostLicense Seq.empty<int>
             match result with
-            | Ok license -> _license <- license
+            | Ok license -> this.License <- license
             | _ -> ()
         }
