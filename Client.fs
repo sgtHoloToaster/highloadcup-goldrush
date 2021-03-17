@@ -33,6 +33,7 @@ type Client(baseUrl) =
 
     member private this.Post<'T, 'T1> (url: string) (body: 'T1) = 
         async {
+            Console.WriteLine("posting: " + url)
             let bodyJson = JsonSerializer.Serialize(body)
             use content = new StringContent(bodyJson, Encoding.UTF8, "application/json")
             try
@@ -45,6 +46,7 @@ type Client(baseUrl) =
     member private this.Get<'T> (url: string) =
         async {
             try
+                Console.WriteLine("getting: " + url)
                 let! response = client.GetAsync(url) |> Async.AwaitTask
                 return! processResponse response
             with
