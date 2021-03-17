@@ -66,12 +66,12 @@ let rec explore (client: Client) (diggerAgent: MailboxProcessor<DiggerMessage>) 
 
 let game (client: Client) = async {
     let diggerAgents = [|0 .. 100|] |> Seq.map (fun _ -> MailboxProcessor.Start (digger client))
-    let diggerAgentsEnumerator = diggerAgents.GetEnumerator()
+    let mutable diggerAgentsEnumerator = diggerAgents.GetEnumerator()
     for x in 0 .. 3500 do
         for y in 0 .. 3500 do
             let area = { oneBlockArea with PosX = x; PosY = y }
             if not (diggerAgentsEnumerator.MoveNext()) then
-                diggerAgentsEnumerator.Reset()
+                diggerAgentsEnumerator <- diggerAgents.GetEnumerator()
                 diggerAgentsEnumerator.MoveNext() |> ignore
 
             let diggerAgent = diggerAgentsEnumerator.Current
