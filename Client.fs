@@ -19,7 +19,6 @@ jsonSerializerOptions.Converters.Add(JsonFSharpConverter())
 let inline deserializeResponseBody<'T> (response: HttpResponseMessage) =
     async {
         let! content = response.Content.ReadAsStringAsync() |> Async.AwaitTask
-        Console.WriteLine("response content: \n" + content);
         return JsonSerializer.Deserialize<'T>(content, jsonSerializerOptions)
     }
 
@@ -33,7 +32,6 @@ type Client(baseUrl) =
     let client = new HttpClient()
     member private this.Post<'T, 'T1> (url: string) (body: 'T1) = 
         async {
-            Console.WriteLine("posting: " + url)
             let bodyJson = JsonSerializer.Serialize(body)
             use content = new StringContent(bodyJson, Encoding.UTF8, "application/json")
             try
@@ -43,9 +41,8 @@ type Client(baseUrl) =
             with
             | :? AggregateException as aggex -> 
                 match aggex.InnerException with
-                | :? HttpRequestException as ex -> 
-                    return Error (ex :> Exception)
-                | _ -> Console.WriteLine(aggex.InnerException); return Error aggex.InnerException
+                | :? HttpRequestException as ex -> return Error (ex :> Exception)
+                | _ -> return Error aggex.InnerException
             | :? HttpRequestException as ex -> 
                 return Error (ex :> Exception)
         }
@@ -53,18 +50,15 @@ type Client(baseUrl) =
     member private this.Get<'T> (url: string) =
         async {
             try
-                Console.WriteLine("getting: " + url)
                 let! response = client.GetAsync(url) |> Async.AwaitTask
                 return! processResponse response
             with
             | :? AggregateException as aggex -> 
                 match aggex.InnerException with
                 | :? HttpRequestException as ex -> 
-                    Console.WriteLine("error:\n" + ex.Message)
                     return Error (ex :> Exception)
                 | _ -> Console.WriteLine(aggex.InnerException); return Error aggex.InnerException
             | :? HttpRequestException as ex -> 
-                Console.WriteLine("error:\n" + ex.Message)
                 return Error (ex :> Exception)
         }
 

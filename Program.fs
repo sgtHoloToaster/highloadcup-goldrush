@@ -24,6 +24,7 @@ let digger (client: Client) (inbox: MailboxProcessor<DiggerMessage>) =
     let doDig msg = async {
         let dig = { LicenseID = license.Id.Value; PosX = msg.PosX; PosY = msg.PosY; Depth = msg.Depth }
         let! treasuresResult = client.PostDig dig
+        Console.WriteLine("dig result: " + treasuresResult.ToString())
         match treasuresResult with 
         | Error _ -> inbox.Post msg // retry
         | Ok treasures -> 
@@ -33,23 +34,19 @@ let digger (client: Client) (inbox: MailboxProcessor<DiggerMessage>) =
             inbox.Post { msg with Depth = msg.Depth + 1; Amount = msg.Amount - 1 }
     }
 
-    let rec getNewLicense = async {
-        let! licenseUpdateResult = client.PostLicense Seq.empty<int>
-        return match licenseUpdateResult with 
-               | Ok newLicense -> newLicense
-               | Error ex -> Console.WriteLine("License load error: \n" + ex.ToString()); getNewLicense |> Async.RunSynchronously
-    }
-
     let rec messageLoop() = async {
         let! msg = inbox.Receive()
-        if msg.Amount = 0 || msg.Depth = 10 then return! messageLoop()
+        Console.WriteLine("received: " + msg.ToString())
+        if msg.Amount > 0 && msg.Depth < 10 then 
+            while license.Id.IsNone || license.DigAllowed <= license.DigUsed do
+                let! licenseUpdateResult = client.PostLicense Seq.empty<int>
+                return match licenseUpdateResult with 
+                       | Ok newLicense -> license <- newLicense
+                       | Error _ -> ()
 
-        if license.Id.IsNone || license.DigAllowed <= license.DigUsed then
-            let! newLicense = getNewLicense
-            license <- newLicense
+            license <- { license with DigUsed = license.DigUsed + 1 }
+            doDig msg |> Async.Start
 
-        license <- { license with DigUsed = license.DigUsed + 1 }
-        doDig msg |> Async.Start
         return! messageLoop()
     }
 
