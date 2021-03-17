@@ -65,7 +65,7 @@ let rec explore (client: Client) (diggerAgent: MailboxProcessor<DiggerMessage>) 
 }
 
 let game (client: Client) = async {
-    let diggerAgents = [|0 .. 100|] |> Seq.map (fun _ -> MailboxProcessor.Start (digger client))
+    let diggerAgents = [|0 .. 1000|] |> Seq.map (fun _ -> MailboxProcessor.Start (digger client))
     let mutable diggerAgentsEnumerator = diggerAgents.GetEnumerator()
     for x in 0 .. 3500 do
         for y in 0 .. 3500 do
@@ -77,7 +77,7 @@ let game (client: Client) = async {
 
             let diggerAgent = diggerAgentsEnumerator.Current
             explore client diggerAgent area |> Async.Start
-            do! Async.Sleep(200)
+            do! Async.Sleep(100)
 
     }
 
