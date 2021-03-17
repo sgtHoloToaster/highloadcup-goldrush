@@ -29,7 +29,7 @@ let digger (client: Client) (inbox: MailboxProcessor<DiggerMessage>) =
         | Error _ -> inbox.Post msg // retry
         | Ok treasures -> 
             for treasure in treasures.Treasures do
-                postCash treasure |> Async.Start
+                do! postCash treasure
 
             inbox.Post { msg with Depth = msg.Depth + 1; Amount = msg.Amount - 1 }
     }
@@ -37,7 +37,7 @@ let digger (client: Client) (inbox: MailboxProcessor<DiggerMessage>) =
     let rec messageLoop() = async {
         let! msg = inbox.Receive()
         Console.WriteLine("received: " + msg.ToString())
-        if msg.Amount > 0 && msg.Depth < 10 then 
+        if msg.Amount > 0 && msg.Depth <= 10 then 
             while license.Id.IsNone || license.DigAllowed <= license.DigUsed do
                 let! licenseUpdateResult = client.PostLicense Seq.empty<int>
                 return match licenseUpdateResult with 
