@@ -6,6 +6,7 @@ open System.Text
 open Models
 open System
 open System.Net
+open System.Text.Json.Serialization
 
 type ExploreResult = {
     Area: Area
@@ -13,6 +14,7 @@ type ExploreResult = {
 }
 
 let jsonSerializerOptions: JsonSerializerOptions = new JsonSerializerOptions( PropertyNameCaseInsensitive = true )
+jsonSerializerOptions.Converters.Add(JsonFSharpConverter())
 
 let inline deserializeResponseBody<'T> (response: HttpResponseMessage) =
     async {
