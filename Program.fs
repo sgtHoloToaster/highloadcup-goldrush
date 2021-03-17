@@ -28,7 +28,7 @@ let digger (client: Client) (inbox: MailboxProcessor<DiggerMessage>) =
         | Error _ -> inbox.Post msg // retry
         | Ok treasures -> 
             for treasure in treasures.Treasures do
-                postCash treasure |> ignore
+                postCash treasure |> Async.Start
 
             inbox.Post { msg with Depth = msg.Depth + 1; Amount = msg.Amount - 1 }
     }
@@ -47,7 +47,7 @@ let digger (client: Client) (inbox: MailboxProcessor<DiggerMessage>) =
             | _ -> ()
 
         license <- { license with DigUsed = license.DigUsed + 1 }
-        doDig msg |> ignore
+        doDig msg |> Async.Start
         return! messageLoop()
         }
 
