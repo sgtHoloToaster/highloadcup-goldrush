@@ -40,7 +40,9 @@ type Client(baseUrl) =
                 let! response = client.PostAsync(url, content) |> Async.AwaitTask
                 return! processResponse<'T> response
             with
-            | :? HttpRequestException as ex -> return Error ex.StatusCode.Value
+            | :? HttpRequestException as ex -> 
+                Console.WriteLine("error:\n" + ex.Message)
+                return Error ex.StatusCode.Value
         }
 
     member private this.Get<'T> (url: string) =
@@ -50,7 +52,9 @@ type Client(baseUrl) =
                 let! response = client.GetAsync(url) |> Async.AwaitTask
                 return! processResponse response
             with
-            | :? HttpRequestException as ex -> return Error ex.StatusCode.Value
+            | :? HttpRequestException as ex -> 
+                Console.WriteLine("error:\n" + ex.Message)
+                return Error ex.StatusCode.Value
         }
 
     member this.PostLicense (coins: int seq) =  
