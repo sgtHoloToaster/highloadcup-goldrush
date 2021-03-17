@@ -46,11 +46,11 @@ type Client(baseUrl) =
                 match aggex.InnerException with
                 | :? HttpRequestException as ex -> 
                     Console.WriteLine("error:\n" + ex.Message)
-                    return Error ex.StatusCode.Value
+                    return Error(ex.StatusCode.GetValueOrDefault())
                 | _ -> Console.WriteLine(aggex.InnerException); return Error HttpStatusCode.InternalServerError
             | :? HttpRequestException as ex -> 
                 Console.WriteLine("error:\n" + ex.Message)
-                return Error ex.StatusCode.Value
+                return Error(ex.StatusCode.GetValueOrDefault())
         }
 
     member private this.Get<'T> (url: string) =
@@ -64,11 +64,11 @@ type Client(baseUrl) =
                 match aggex.InnerException with
                 | :? HttpRequestException as ex -> 
                     Console.WriteLine("error:\n" + ex.Message)
-                    return Error ex.StatusCode.Value
+                    return Error(ex.StatusCode.GetValueOrDefault())
                 | _ -> Console.WriteLine(aggex.InnerException); return Error HttpStatusCode.InternalServerError
             | :? HttpRequestException as ex -> 
                 Console.WriteLine("error:\n" + ex.Message)
-                return Error ex.StatusCode.Value
+                return Error(ex.StatusCode.GetValueOrDefault())
         }
 
     member this.PostLicense (coins: int seq) =  
