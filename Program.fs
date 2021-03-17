@@ -40,6 +40,7 @@ let digger (client: Client) (inbox: MailboxProcessor<DiggerMessage>) =
         let condition = fun () -> match license.Id with
                                   | Some _ when license.DigUsed < license.DigAllowed -> false
                                   | _ -> true
+                                  
         while condition() do
             let! licenseUpdateResult = client.PostLicense Seq.empty<int>
             match licenseUpdateResult with 
@@ -53,18 +54,22 @@ let digger (client: Client) (inbox: MailboxProcessor<DiggerMessage>) =
 
     messageLoop()
 
+let rec explore (client: Client) (diggerAgent: MailboxProcessor<DiggerMessage>) (area: Area) = async {
+    let! result = client.PostExplore(area)
+    match result with 
+    | Ok exploreResult when exploreResult.Amount > 0 -> 
+        diggerAgent.Post { PosX = exploreResult.Area.PosX; PosY = exploreResult.Area.PosY; Depth = 1; Amount = exploreResult.Amount }
+    | Ok _ -> ()
+    | Error _ -> return! explore client diggerAgent area
+}
+
 let game (client: Client) = async {
     let diggerAgent = MailboxProcessor.Start (digger client)
+    let explore' = explore client diggerAgent
     for x in 0 .. 3500 do
         for y in 0 .. 3500 do
             let area = { oneBlockArea with PosX = x; PosY = y }
-            let! result = client.PostExplore(area)
-            match result with 
-            | Ok exploreResult when exploreResult.Amount > 0 -> 
-                Console.WriteLine("explore result is ok: " + exploreResult.ToString())
-                diggerAgent.Post { PosX = exploreResult.Area.PosX; PosY = exploreResult.Area.PosY; Depth = 1; Amount = exploreResult.Amount }
-            | Ok exploreResult -> Console.WriteLine("explore result is ok, but without amount: " + exploreResult.ToString())
-            | Error code -> Console.WriteLine("explore result is not ok: " + code.ToString())
+            explore' area |> Async.Start
 
     }
 
