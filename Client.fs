@@ -90,7 +90,7 @@ type Client(baseUrl) =
         }
 
     member this.PostCash (treasure: string) =
-        this.Post<unit, string> (baseUrl + "cash") treasure
+        this.Post<int seq, string> (baseUrl + "cash") treasure
 
     member this.PostExplore (area: Area) = 
         async {
