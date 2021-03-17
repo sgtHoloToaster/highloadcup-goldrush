@@ -12,11 +12,13 @@ type ExploreResult = {
     Amount: int
 }
 
+let jsonSerializerOptions: JsonSerializerOptions = new JsonSerializerOptions( PropertyNameCaseInsensitive = true )
+
 let inline deserializeResponseBody<'T> (response: HttpResponseMessage) =
     async {
         let! content = response.Content.ReadAsStringAsync() |> Async.AwaitTask
         Console.WriteLine("response content: \n" + content);
-        return JsonSerializer.Deserialize<'T>(content)
+        return JsonSerializer.Deserialize<'T>(content, jsonSerializerOptions)
     }
 
 let inline processResponse<'T> (response: HttpResponseMessage) =
