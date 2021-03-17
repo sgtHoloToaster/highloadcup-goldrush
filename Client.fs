@@ -5,6 +5,7 @@ open System.Text.Json
 open System.Text
 open Models
 open System
+open System.Net
 
 type ExploreResult = {
     Area: Area
@@ -41,6 +42,12 @@ type Client(baseUrl) =
                 let! response = client.PostAsync(url, content) |> Async.AwaitTask
                 return! processResponse<'T> response
             with
+            | :? AggregateException as aggex -> 
+                match aggex.InnerException with
+                | :? HttpRequestException as ex -> 
+                    Console.WriteLine("error:\n" + ex.Message)
+                    return Error ex.StatusCode.Value
+                | _ -> Console.WriteLine(aggex.InnerException); return Error HttpStatusCode.InternalServerError
             | :? HttpRequestException as ex -> 
                 Console.WriteLine("error:\n" + ex.Message)
                 return Error ex.StatusCode.Value
@@ -53,6 +60,12 @@ type Client(baseUrl) =
                 let! response = client.GetAsync(url) |> Async.AwaitTask
                 return! processResponse response
             with
+            | :? AggregateException as aggex -> 
+                match aggex.InnerException with
+                | :? HttpRequestException as ex -> 
+                    Console.WriteLine("error:\n" + ex.Message)
+                    return Error ex.StatusCode.Value
+                | _ -> Console.WriteLine(aggex.InnerException); return Error HttpStatusCode.InternalServerError
             | :? HttpRequestException as ex -> 
                 Console.WriteLine("error:\n" + ex.Message)
                 return Error ex.StatusCode.Value
