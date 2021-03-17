@@ -35,8 +35,6 @@ let inline processResponse<'T> (response: HttpResponseMessage) =
 
 type Client(baseUrl) =
     let client = new HttpClient()
-    member val License = { DigAllowed = 0; DigUsed = 0; Id = None } with get, set
-
     member private this.Post<'T, 'T1> (url: string) (body: 'T1) = 
         async {
             Console.WriteLine("posting: " + url)
@@ -102,11 +100,3 @@ type Client(baseUrl) =
         
     member this.GetBalance() =
         this.Get<Wallet> (baseUrl + "balance")
-
-    member this.UpdateLicense() =
-        async {
-            let! result = this.PostLicense Seq.empty<int>
-            match result with
-            | Ok license -> this.License <- license
-            | _ -> ()
-        }

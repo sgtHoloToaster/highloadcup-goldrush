@@ -8,21 +8,25 @@ let game (client: Client) = async {
     for x in 0 .. 3500 do
         for y in 0 .. 3500 do
             let area = { oneBlockArea with PosX = x; PosY = y }
+            let mutable license = { DigAllowed = 0; DigUsed = 0; Id = None }
             let! result = client.PostExplore(area)
             match result with 
             | Ok exploreResult when exploreResult.Amount > 0 -> 
                 Console.WriteLine("explore result is ok: " + exploreResult.ToString())
                 let mutable depth = 1
                 let mutable left = exploreResult.Amount
-                let condition = fun () -> match client.License.Id with
-                                          | Some _ when client.License.DigUsed < client.License.DigAllowed -> false
+                let condition = fun () -> match license.Id with
+                                          | Some _ when license.DigUsed < license.DigAllowed -> false
                                           | _ -> true
                 while condition() do
-                    client.UpdateLicense() |> Async.RunSynchronously |> ignore
+                    let! licenseUpdateResult = client.PostLicense Seq.empty<int>
+                    match licenseUpdateResult with 
+                    | Ok newLicense -> license <- newLicense
+                    | _ -> ()
 
-                let dig = { LicenseID = client.License.Id.Value; PosX = x; PosY = y; Depth = 1 }
+                let dig = { LicenseID = license.Id.Value; PosX = x; PosY = y; Depth = 1 }
                 let! treasuresResult = client.PostDig dig
-                client.License <- { client.License with DigUsed = client.License.DigUsed + 1 }
+                license <- { license with DigUsed = license.DigUsed + 1 }
                 depth <- depth + 1
                 match treasuresResult with 
                 | Error _ -> ()
