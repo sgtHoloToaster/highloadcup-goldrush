@@ -45,12 +45,12 @@ let digger (client: Client) (inbox: MailboxProcessor<DiggerMessage>) =
             let! licenseUpdateResult = client.PostLicense Seq.empty<int>
             match licenseUpdateResult with 
             | Ok newLicense -> license <- newLicense
-            | _ -> ()
+            | Error ex -> Console.WriteLine("License load error: \n" + ex.ToString())
 
         license <- { license with DigUsed = license.DigUsed + 1 }
         doDig msg |> Async.Start
         return! messageLoop()
-        }
+    }
 
     messageLoop()
 

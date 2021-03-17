@@ -25,12 +25,8 @@ let inline deserializeResponseBody<'T> (response: HttpResponseMessage) =
 
 let inline processResponse<'T> (response: HttpResponseMessage) =
     async {
-        match response.IsSuccessStatusCode with 
-        | true -> 
-            let! body = deserializeResponseBody<'T> response
-            return Ok body
-        | false -> 
-            return Error response.StatusCode
+        let! body = deserializeResponseBody<'T> response
+        return Ok body
     }
 
 type Client(baseUrl) =
@@ -42,17 +38,16 @@ type Client(baseUrl) =
             use content = new StringContent(bodyJson, Encoding.UTF8, "application/json")
             try
                 let! response = client.PostAsync(url, content) |> Async.AwaitTask
+                response.EnsureSuccessStatusCode() |> ignore
                 return! processResponse<'T> response
             with
             | :? AggregateException as aggex -> 
                 match aggex.InnerException with
                 | :? HttpRequestException as ex -> 
-                    Console.WriteLine("error:\n" + ex.Message)
-                    return Error(ex.StatusCode.GetValueOrDefault())
-                | _ -> Console.WriteLine(aggex.InnerException); return Error HttpStatusCode.InternalServerError
+                    return Error (ex :> Exception)
+                | _ -> Console.WriteLine(aggex.InnerException); return Error aggex.InnerException
             | :? HttpRequestException as ex -> 
-                Console.WriteLine("error:\n" + ex.Message)
-                return Error(ex.StatusCode.GetValueOrDefault())
+                return Error (ex :> Exception)
         }
 
     member private this.Get<'T> (url: string) =
@@ -66,11 +61,11 @@ type Client(baseUrl) =
                 match aggex.InnerException with
                 | :? HttpRequestException as ex -> 
                     Console.WriteLine("error:\n" + ex.Message)
-                    return Error(ex.StatusCode.GetValueOrDefault())
-                | _ -> Console.WriteLine(aggex.InnerException); return Error HttpStatusCode.InternalServerError
+                    return Error (ex :> Exception)
+                | _ -> Console.WriteLine(aggex.InnerException); return Error aggex.InnerException
             | :? HttpRequestException as ex -> 
                 Console.WriteLine("error:\n" + ex.Message)
-                return Error(ex.StatusCode.GetValueOrDefault())
+                return Error (ex :> Exception)
         }
 
     member this.PostLicense (coins: int seq) =  
