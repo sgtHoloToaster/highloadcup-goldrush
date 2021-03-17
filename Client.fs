@@ -4,6 +4,7 @@ open System.Net.Http
 open System.Text.Json
 open System.Text
 open Models
+open System
 
 type ExploreResult = {
     Area: Area
@@ -19,11 +20,11 @@ let inline deserializeResponseBody<'T> (response: HttpResponseMessage) =
 let inline processResponse<'T> (response: HttpResponseMessage) =
     async {
         match response.IsSuccessStatusCode with 
-            | true -> 
-                let! body = deserializeResponseBody<'T> response
-                return Ok body
-            | false -> 
-                return Error response.StatusCode
+        | true -> 
+            let! body = deserializeResponseBody<'T> response
+            return Ok body
+        | false -> 
+            return Error response.StatusCode
     }
 
 type Client(baseUrl) =
@@ -34,14 +35,20 @@ type Client(baseUrl) =
         async {
             let bodyJson = JsonSerializer.Serialize(body)
             use content = new StringContent(bodyJson, Encoding.UTF8, "application/json")
-            let! response = client.PostAsync(url, content) |> Async.AwaitTask
-            return! processResponse<'T> response
+            try
+                let! response = client.PostAsync(url, content) |> Async.AwaitTask
+                return! processResponse<'T> response
+            with
+            | :? HttpRequestException as ex -> return Error ex.StatusCode.Value
         }
 
     member private this.Get<'T> (url: string) =
         async {
-            let! response = client.GetAsync(url) |> Async.AwaitTask
-            return! processResponse response
+            try
+                let! response = client.GetAsync(url) |> Async.AwaitTask
+                return! processResponse response
+            with
+            | :? HttpRequestException as ex -> return Error ex.StatusCode.Value
         }
 
     member this.PostLicense (coins: int seq) =  
