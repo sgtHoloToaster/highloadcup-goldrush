@@ -70,6 +70,7 @@ let game (client: Client) = async {
         for y in 0 .. 3500 do
             let area = { oneBlockArea with PosX = x; PosY = y }
             explore' area |> Async.Start
+            do! Async.Sleep(500)
 
     }
 
