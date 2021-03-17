@@ -33,19 +33,20 @@ let digger (client: Client) (inbox: MailboxProcessor<DiggerMessage>) =
             inbox.Post { msg with Depth = msg.Depth + 1; Amount = msg.Amount - 1 }
     }
 
+    let rec getNewLicense = async {
+        let! licenseUpdateResult = client.PostLicense Seq.empty<int>
+        return match licenseUpdateResult with 
+               | Ok newLicense -> newLicense
+               | Error ex -> Console.WriteLine("License load error: \n" + ex.ToString()); getNewLicense |> Async.RunSynchronously
+    }
+
     let rec messageLoop() = async {
         let! msg = inbox.Receive()
         if msg.Amount = 0 || msg.Depth = 10 then return! messageLoop()
 
-        let condition = fun () -> match license.Id with
-                                  | Some _ when license.DigUsed < license.DigAllowed -> false
-                                  | _ -> true
-                                  
-        while condition() do
-            let! licenseUpdateResult = client.PostLicense Seq.empty<int>
-            match licenseUpdateResult with 
-            | Ok newLicense -> license <- newLicense
-            | Error ex -> Console.WriteLine("License load error: \n" + ex.ToString())
+        if license.Id.IsNone || license.DigAllowed <= license.DigUsed then
+            let! newLicense = getNewLicense
+            license <- newLicense
 
         license <- { license with DigUsed = license.DigUsed + 1 }
         doDig msg |> Async.Start
@@ -66,11 +67,13 @@ let rec explore (client: Client) (diggerAgent: MailboxProcessor<DiggerMessage>) 
 let game (client: Client) = async {
     let diggerAgent = MailboxProcessor.Start (digger client)
     let explore' = explore client diggerAgent
+    let! licenses = client.GetLicenses()
+    Console.WriteLine(licenses)
     for x in 0 .. 3500 do
         for y in 0 .. 3500 do
             let area = { oneBlockArea with PosX = x; PosY = y }
             explore' area |> Async.Start
-            do! Async.Sleep(500)
+            do! Async.Sleep(200)
 
     }
 
