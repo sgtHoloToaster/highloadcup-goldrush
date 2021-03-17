@@ -11,6 +11,7 @@ let game (client: Client) = async {
             let! result = client.PostExplore(area)
             match result with 
             | Ok exploreResult when exploreResult.Amount > 0 -> 
+                Console.WriteLine("explore result is ok: " + exploreResult.ToString())
                 let mutable depth = 1
                 let mutable left = exploreResult.Amount
                 let condition = fun () -> match client.License.Id with
@@ -31,7 +32,8 @@ let game (client: Client) = async {
                         match res with 
                         | Ok _ -> left <- left - 1
                         | _ -> ()
-            | _ -> ()
+            | Ok exploreResult -> Console.WriteLine("explore result is ok, but without amount: " + exploreResult.ToString())
+            | Error code -> Console.WriteLine("explore result is not ok: " + code.ToString())
 
     }
 

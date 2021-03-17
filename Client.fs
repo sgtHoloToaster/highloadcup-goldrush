@@ -13,8 +13,9 @@ type ExploreResult = {
 
 let inline deserializeResponseBody<'T> (response: HttpResponseMessage) =
     async {
-        let! content = response.Content.ReadAsStreamAsync() |> Async.AwaitTask
-        return! JsonSerializer.DeserializeAsync<'T>(content).AsTask() |> Async.AwaitTask
+        let! content = response.Content.ReadAsStringAsync() |> Async.AwaitTask
+        Console.WriteLine("response content: \n" + content);
+        return JsonSerializer.Deserialize<'T>(content)
     }
 
 let inline processResponse<'T> (response: HttpResponseMessage) =
