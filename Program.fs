@@ -22,10 +22,13 @@ let digger (client: Client) (inbox: MailboxProcessor<DiggerMessage>) =
         | Error ex -> 
             Console.WriteLine(ex); 
             match ex with 
-            | :? HttpRequestException as ex when ex.StatusCode.HasValue && (ex.StatusCode.Value = HttpStatusCode.NotFound || ex.StatusCode.Value = HttpStatusCode.UnprocessableEntity) -> ()
+            | :? HttpRequestException as ex when ex.StatusCode.HasValue ->
+                match ex.StatusCode.Value with 
+                | HttpStatusCode.NotFound -> inbox.Post { msg with Depth = msg.Depth + 1 }
+                | HttpStatusCode.UnprocessableEntity -> ()
+                | _ -> inbox.Post msg // retry
             | _ -> inbox.Post msg // retry
         | Ok treasures -> 
-            Console.WriteLine("dig result: " + treasures.ToString())
             let digged = 
                 treasures.Treasures 
                 |> Seq.map (
