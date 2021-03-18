@@ -6,9 +6,22 @@ open Client
 open System.Net.Http
 open System.Net
 
+type AreaSize = {
+    SizeX: int
+    SizeY: int
+}
+
 type Coordinates = {
     PosX: int
     PosY: int
+}
+
+type ExplorerMessage = {
+    PosX: int
+    PosY: int
+    SizeX: int
+    SizeY: int
+    Amount: Option<int>
 }
 
 type DiggerMessage = {
@@ -69,16 +82,6 @@ let digger (client: Client) (inbox: MailboxProcessor<DiggerMessage>) =
 
     messageLoop { Id = None; DigAllowed = 0; DigUsed = 0 }
 
-let rec exploreAndDig (client: Client) (diggerAgent: MailboxProcessor<DiggerMessage>) (coordinates: Coordinates) = async {
-    let area = { oneBlockArea with PosX = coordinates.PosX; PosY = coordinates.PosY }
-    let! result = client.PostExplore(area)
-    match result with 
-    | Ok exploreResult when exploreResult.Amount > 0 -> 
-        diggerAgent.Post { PosX = exploreResult.Area.PosX; PosY = exploreResult.Area.PosY; Depth = 1; Amount = exploreResult.Amount }
-    | Ok _ -> ()
-    | Error _ -> return! exploreAndDig client diggerAgent coordinates
-}
-
 let createDiggerAgentsPool client diggerAgentsCount = 
     let diggerAgents = 
         [| 1 .. diggerAgentsCount|] 
@@ -98,6 +101,78 @@ let createDiggerAgentsPool client diggerAgentsCount =
         | true -> enumerator.Current
         | false -> raise (InvalidOperationException("Infinite enumerator is not infinite"))
 
+let explorer (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<DiggerMessage>) (digAreaSize: AreaSize) (inbox: MailboxProcessor<ExplorerMessage>) =
+    //let rec exploreAndDig (coordinates: Coordinates) = async {
+    //    let area = { oneBlockArea with PosX = coordinates.PosX; PosY = coordinates.PosY }
+    //    let! result = client.PostExplore(area)
+    //    match result with 
+    //    | Ok exploreResult when exploreResult.Amount > 0 -> 
+    //        diggerAgentsPool().Post { PosX = exploreResult.Area.PosX; PosY = exploreResult.Area.PosY; Depth = 1; Amount = exploreResult.Amount }
+    //    | Ok _ -> ()
+    //    | Error _ -> return! exploreAndDig coordinates
+    //}
+
+    let rec exploreArea (area: Area) = async {
+        let! exploreResult = client.PostExplore(area)
+        match exploreResult with 
+        | Ok _ -> return  exploreResult
+        | Error _ -> return! exploreArea area
+    }
+
+    let rec exploreOneBlock (coordinates: Coordinates) = 
+        exploreArea { oneBlockArea with PosX = coordinates.PosX; PosY = coordinates.PosY }
+
+    let rec exploreAndDigArea (area: Area) (amount: int) (currentCoordinates: Coordinates) = async {
+        let! result = exploreOneBlock currentCoordinates
+        let left = 
+            match result with
+            | Ok exploreResult when exploreResult.Amount > 0 -> 
+                diggerAgentsPool().Post { PosX = exploreResult.Area.PosX; PosY = exploreResult.Area.PosY; Amount = exploreResult.Amount; Depth = 1 }
+                amount - exploreResult.Amount
+            | _ -> amount
+            
+        if left > 0 then
+            let maxPosX = area.PosX + area.SizeX
+            let maxPosY = area.PosY + area.SizeY
+            let newCoordinates = 
+                match currentCoordinates.PosX, currentCoordinates.PosY with
+                | x, y when x = maxPosX && y = maxPosY -> 
+                    Console.WriteLine("Treasures were not found after exploring the entire area")
+                    { PosX = area.PosX; PosY = area.PosY }
+                | x, y when x = maxPosX -> { PosX = area.PosX; PosY = y + 1 }
+                | x, y -> { PosX = x + 1; PosY = y }
+
+            return! exploreAndDigArea area left newCoordinates
+    }
+        
+
+    let rec messageLoop() = async {
+        let! msg = inbox.Receive()
+        match msg.SizeX, msg.SizeY, msg.Amount with 
+        | _, _, Some 0 -> ()
+        | sizeX, sizeY, Some amount when sizeX > digAreaSize.SizeX || sizeY > digAreaSize.SizeY ->
+            let maxPosX = msg.PosX + sizeX;
+            let maxPosY = msg.PosY + sizeY;
+            let stepX = digAreaSize.SizeX
+            let stepY = digAreaSize.SizeY
+            for xx in msg.PosX .. stepX .. maxPosX do
+                for yy in msg.PosY .. stepY .. maxPosY do
+                    let newMsg = { PosX = Math.Min(xx, maxPosX);  PosY = Math.Min(yy, maxPosY); SizeX = stepX; SizeY = stepY; Amount = Some amount }
+                    inbox.Post newMsg
+        | _, _, Some amount ->
+            do! exploreAndDigArea { PosX = msg.PosX; PosY = msg.PosY; SizeX = msg.SizeX; SizeY = msg.SizeY } amount { PosX = msg.PosX; PosY = msg.PosY }
+        | _, _, None ->
+            let! exploreResult = exploreArea { PosX = msg.PosX; PosY = msg.PosY; SizeX = msg.SizeX; SizeY = msg.SizeY }
+            let amount = match exploreResult with
+                         | Ok result -> Some result.Amount
+                         | _ -> None
+            inbox.Post { msg with Amount = amount }
+
+        return! messageLoop()
+    }
+
+    messageLoop()
+
 let game (client: Client) = async {
     let diggersCount = 8
     let diggerAgentsPool = createDiggerAgentsPool client diggersCount
@@ -108,11 +183,12 @@ let game (client: Client) = async {
     | Ok licenses -> Console.WriteLine(licenses)
     | Error ex -> Console.WriteLine("Error loading licenses: " + ex.ToString())
 
-    for x in 0 .. 3500 do
-        for y in 0 .. 3500 do
-            let coordinates = { PosX = x; PosY = y }
-            let diggerAgent = diggerAgentsPool()
-            exploreAndDig client diggerAgent coordinates |> Async.Start
+    let digAreaSize = { SizeX = 4; SizeY = 4 }
+    let explorer = MailboxProcessor.Start (explorer client diggerAgentsPool digAreaSize)
+    for x in 0 .. digAreaSize.SizeX .. 3500 do
+        for y in 0 .. digAreaSize.SizeY .. 3500 do
+            let msg = { PosX = x; PosY = y; SizeX = digAreaSize.SizeX; SizeY = digAreaSize.SizeY; Amount = None }
+            explorer.Post msg
             do! Async.Sleep(1)
 
     }
