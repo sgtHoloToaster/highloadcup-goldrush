@@ -3,6 +3,8 @@
 open System
 open Models
 open Client
+open System.Net.Http
+open System.Net
 
 type DiggerMessage = {
     PosX: int
@@ -12,44 +14,48 @@ type DiggerMessage = {
 }
 
 let digger (client: Client) (inbox: MailboxProcessor<DiggerMessage>) = 
-    let mutable license = { DigAllowed = 0; DigUsed = 0; Id = None }
+    let rec messageLoop (license: License) = async {
+        let inline doDig msg = async {
+            let dig = { LicenseID = license.Id.Value; PosX = msg.PosX; PosY = msg.PosY; Depth = msg.Depth }
+            let! treasuresResult = client.PostDig dig
+            match treasuresResult with 
+            | Error ex -> 
+                Console.WriteLine(ex); 
+                match ex with 
+                | :? HttpRequestException as ex when ex.StatusCode.HasValue && (ex.StatusCode.Value = HttpStatusCode.NotFound || ex.StatusCode.Value = HttpStatusCode.UnprocessableEntity) -> ()
+                | _ -> inbox.Post msg // retry
+            | Ok treasures -> 
+                Console.WriteLine("dig result: " + treasures.ToString())
+                let mutable left = msg.Amount
+                for treasure in treasures.Treasures do
+                    let! result = client.PostCash treasure
+                    match result with 
+                    | Ok _ -> left <- left - 1
+                    | _ -> ()
 
-    let doDig msg = async {
-        let dig = { LicenseID = license.Id.Value; PosX = msg.PosX; PosY = msg.PosY; Depth = msg.Depth }
-        let! treasuresResult = client.PostDig dig
-        match treasuresResult with 
-        | Error ex -> Console.WriteLine(ex); inbox.Post msg // retry
-        | Ok treasures -> 
-            Console.WriteLine("dig result: " + treasures.ToString())
-            let mutable left = msg.Amount
-            for treasure in treasures.Treasures do
-                let! result = client.PostCash treasure
-                match result with 
-                | Ok _ -> left <- left - 1
-                | _ -> ()
+                let depth = msg.Depth + 1
+                inbox.Post ({ msg with Depth = depth; Amount = left })
+        }
 
-            let depth = msg.Depth + 1
-            inbox.Post ({ msg with Depth = depth; Amount = left })
-    }
-
-    let rec messageLoop() = async {
         let! msg = inbox.Receive()
         if msg.Depth > 1 then
             Console.WriteLine("received: " + msg.ToString())
-        if msg.Amount > 0 && msg.Depth <= 10 then 
+        if msg.Amount > 0 && msg.Depth <= 10 then
+            let mutable licenseLocal = license;
             while license.Id.IsNone || license.DigAllowed <= license.DigUsed do
                 let! licenseUpdateResult = client.PostLicense Seq.empty<int>
                 return match licenseUpdateResult with 
-                       | Ok newLicense -> license <- newLicense
+                       | Ok newLicense -> licenseLocal <- newLicense
                        | Error _ -> ()
 
-            license <- { license with DigUsed = license.DigUsed + 1 }
+            licenseLocal <- { licenseLocal with DigUsed = licenseLocal.DigUsed + 1 }
             doDig msg |> Async.Start
-
-        return! messageLoop()
+            return! messageLoop licenseLocal
+        else
+            return! messageLoop license
     }
 
-    messageLoop()
+    messageLoop { Id = None; DigAllowed = 0; DigUsed = 0 }
 
 let rec explore (client: Client) (diggerAgent: MailboxProcessor<DiggerMessage>) (area: Area) = async {
     let! result = client.PostExplore(area)
