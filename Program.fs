@@ -18,7 +18,7 @@ let digger (client: Client) (inbox: MailboxProcessor<DiggerMessage>) =
         let dig = { LicenseID = license.Id.Value; PosX = msg.PosX; PosY = msg.PosY; Depth = msg.Depth }
         let! treasuresResult = client.PostDig dig
         match treasuresResult with 
-        | Error _ -> inbox.Post msg // retry
+        | Error ex -> Console.WriteLine(ex); inbox.Post msg // retry
         | Ok treasures -> 
             Console.WriteLine("dig result: " + treasures.ToString())
             let mutable left = msg.Amount
@@ -28,7 +28,8 @@ let digger (client: Client) (inbox: MailboxProcessor<DiggerMessage>) =
                 | Ok _ -> left <- left - 1
                 | _ -> ()
 
-            inbox.Post { msg with Depth = msg.Depth + 1; Amount = left }
+            let depth = msg.Depth + 1
+            inbox.Post ({ msg with Depth = depth; Amount = left })
     }
 
     let rec messageLoop() = async {
