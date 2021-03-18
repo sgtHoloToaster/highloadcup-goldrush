@@ -82,25 +82,6 @@ let digger (client: Client) (inbox: MailboxProcessor<DiggerMessage>) =
 
     messageLoop { Id = None; DigAllowed = 0; DigUsed = 0 }
 
-let createDiggerAgentsPool client diggerAgentsCount = 
-    let diggerAgents = 
-        [| 1 .. diggerAgentsCount|] 
-        |> Seq.map (fun _ -> MailboxProcessor.Start (digger client))
-        |> Seq.toArray
-
-    let rec next () = 
-        seq {
-            for digger in diggerAgents do
-                yield digger
-            yield! next()
-        }
-
-    let enumerator = next().GetEnumerator()
-    fun () -> 
-        match enumerator.MoveNext() with
-        | true -> enumerator.Current
-        | false -> raise (InvalidOperationException("Infinite enumerator is not infinite"))
-
 let explorer (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<DiggerMessage>) (digAreaSize: AreaSize) (inbox: MailboxProcessor<ExplorerMessage>) =
     //let rec exploreAndDig (coordinates: Coordinates) = async {
     //    let area = { oneBlockArea with PosX = coordinates.PosX; PosY = coordinates.PosY }
@@ -123,6 +104,10 @@ let explorer (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<Digger
         exploreArea { oneBlockArea with PosX = coordinates.PosX; PosY = coordinates.PosY }
 
     let rec exploreAndDigArea (area: Area) (amount: int) (currentCoordinates: Coordinates) = async {
+        if amount = 0 then 
+            return ()
+
+        Console.WriteLine("explore and dig area: " + currentCoordinates.ToString())
         let! result = exploreOneBlock currentCoordinates
         let left = 
             match result with
@@ -142,6 +127,7 @@ let explorer (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<Digger
                 | x, y when x = maxPosX -> { PosX = area.PosX; PosY = y + 1 }
                 | x, y -> { PosX = x + 1; PosY = y }
 
+            Console.WriteLine("treasures left: " + left.ToString() + " c: " + newCoordinates.ToString())
             return! exploreAndDigArea area left newCoordinates
     }
         
@@ -152,20 +138,23 @@ let explorer (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<Digger
         match msg.SizeX, msg.SizeY, msg.Amount with 
         | _, _, Some 0 -> Console.WriteLine(1)
         | sizeX, sizeY, Some amount when sizeX > digAreaSize.SizeX || sizeY > digAreaSize.SizeY ->
-            Console.WriteLine(2)
             let maxPosX = msg.PosX + sizeX;
             let maxPosY = msg.PosY + sizeY;
             let stepX = digAreaSize.SizeX
             let stepY = digAreaSize.SizeY
             for xx in msg.PosX .. stepX .. maxPosX do
                 for yy in msg.PosY .. stepY .. maxPosY do
-                    let newMsg = { PosX = xx; PosY = yy; SizeX = Math.Min(stepX, maxPosX - xx); SizeY = Math.Min(stepY, maxPosY - yy); Amount = Some amount }
+                    let newMsg = { 
+                        PosX = xx
+                        PosY = yy 
+                        SizeX = Math.Min(stepX, maxPosX - xx)
+                        SizeY = Math.Min(stepY, maxPosY - yy) 
+                        Amount = Some amount 
+                    }
                     inbox.Post newMsg
         | _, _, Some amount ->
-            Console.WriteLine(3)
             do! exploreAndDigArea { PosX = msg.PosX; PosY = msg.PosY; SizeX = msg.SizeX; SizeY = msg.SizeY } amount { PosX = msg.PosX; PosY = msg.PosY }
         | _, _, None ->
-            Console.WriteLine(4)
             let! exploreResult = exploreArea { PosX = msg.PosX; PosY = msg.PosY; SizeX = msg.SizeX; SizeY = msg.SizeY }
             let amount = match exploreResult with
                          | Ok result -> Some result.Amount
@@ -177,9 +166,29 @@ let explorer (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<Digger
 
     messageLoop()
 
+let createAgentsPool<'Msg> (body: MailboxProcessor<'Msg> -> Async<unit>) agentsCount = 
+    let agents = 
+        [| 1 .. agentsCount|] 
+        |> Seq.map (fun _ -> MailboxProcessor.Start body)
+        |> Seq.toArray
+
+    let rec next () = 
+        seq {
+            for agent in agents do
+                yield agent
+            yield! next()
+        }
+
+    let enumerator = next().GetEnumerator()
+    fun () -> 
+        match enumerator.MoveNext() with
+        | true -> enumerator.Current
+        | false -> raise (InvalidOperationException("Infinite enumerator is not infinite"))
+
 let game (client: Client) = async {
     let diggersCount = 8
-    let diggerAgentsPool = createDiggerAgentsPool client diggersCount
+    let explorersCount = 100
+    let diggerAgentsPool = createAgentsPool (digger client) diggersCount
     Console.WriteLine("diggers: " + diggersCount.ToString())
 
     let! licensesResult = client.GetLicenses()
@@ -187,13 +196,13 @@ let game (client: Client) = async {
     | Ok licenses -> Console.WriteLine(licenses)
     | Error ex -> Console.WriteLine("Error loading licenses: " + ex.ToString())
 
-    let digAreaSize = { SizeX = 4; SizeY = 4 }
-    let explorer = MailboxProcessor.Start (explorer client diggerAgentsPool digAreaSize)
+    let digAreaSize = { SizeX = 2; SizeY = 2 }
+    let explorerAgentsPool = createAgentsPool (explorer client diggerAgentsPool digAreaSize) explorersCount
     for x in 0 .. digAreaSize.SizeX .. 3500 do
         for y in 0 .. digAreaSize.SizeY .. 3500 do
             let msg = { PosX = x; PosY = y; SizeX = digAreaSize.SizeX; SizeY = digAreaSize.SizeY; Amount = None }
-            explorer.Post msg
-            do! Async.Sleep(1)
+            explorerAgentsPool().Post msg
+            do! Async.Sleep(10)
 
     }
 
