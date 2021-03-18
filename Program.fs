@@ -73,18 +73,34 @@ let rec explore (client: Client) (diggerAgent: MailboxProcessor<DiggerMessage>) 
     | Error _ -> return! explore client diggerAgent area
 }
 
+let createDiggerAgentsPool client diggerAgentsCount = 
+    let diggerAgents = 
+        [| 1 .. diggerAgentsCount|] 
+        |> Seq.map (fun _ -> MailboxProcessor.Start (digger client))
+
+    let rec next () = 
+        seq {
+            for digger in diggerAgents do
+                yield digger
+            yield! next()
+        }
+
+    next()
+
 let game (client: Client) = async {
     let diggersCount = 8
-    let diggerAgents = 
-        [| 1 .. diggersCount|] 
-        |> Seq.map (fun _ -> MailboxProcessor.Start (digger client))
-        |> Seq.toArray
-    
-    Console.WriteLine("diggers: " + (diggerAgents |> Seq.length).ToString())
+    let diggerAgentsPool = createDiggerAgentsPool client diggersCount
+    Console.WriteLine("diggers: " + diggersCount.ToString())
+
+    let! licensesResult = client.GetLicenses()
+    match licensesResult with
+    | Ok licenses -> Console.WriteLine(licenses)
+    | Error ex -> Console.WriteLine("Error loading licenses: " + ex.ToString())
+
     for x in 0 .. 3500 do
         for y in 0 .. 3500 do
             let area = { oneBlockArea with PosX = x; PosY = y }
-            let diggerAgent = diggerAgents.[y % diggersCount]
+            let diggerAgent = Seq.head diggerAgentsPool
             explore client diggerAgent area |> Async.Start
             do! Async.Sleep(1)
 
