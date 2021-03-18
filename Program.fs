@@ -148,20 +148,24 @@ let explorer (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<Digger
 
     let rec messageLoop() = async {
         let! msg = inbox.Receive()
+        Console.WriteLine("received: " + msg.ToString())
         match msg.SizeX, msg.SizeY, msg.Amount with 
-        | _, _, Some 0 -> ()
+        | _, _, Some 0 -> Console.WriteLine(1)
         | sizeX, sizeY, Some amount when sizeX > digAreaSize.SizeX || sizeY > digAreaSize.SizeY ->
+            Console.WriteLine(2)
             let maxPosX = msg.PosX + sizeX;
             let maxPosY = msg.PosY + sizeY;
             let stepX = digAreaSize.SizeX
             let stepY = digAreaSize.SizeY
             for xx in msg.PosX .. stepX .. maxPosX do
                 for yy in msg.PosY .. stepY .. maxPosY do
-                    let newMsg = { PosX = Math.Min(xx, maxPosX);  PosY = Math.Min(yy, maxPosY); SizeX = stepX; SizeY = stepY; Amount = Some amount }
+                    let newMsg = { PosX = xx; PosY = yy; SizeX = Math.Min(stepX, maxPosX - xx); SizeY = Math.Min(stepY, maxPosY - yy); Amount = Some amount }
                     inbox.Post newMsg
         | _, _, Some amount ->
+            Console.WriteLine(3)
             do! exploreAndDigArea { PosX = msg.PosX; PosY = msg.PosY; SizeX = msg.SizeX; SizeY = msg.SizeY } amount { PosX = msg.PosX; PosY = msg.PosY }
         | _, _, None ->
+            Console.WriteLine(4)
             let! exploreResult = exploreArea { PosX = msg.PosX; PosY = msg.PosY; SizeX = msg.SizeX; SizeY = msg.SizeY }
             let amount = match exploreResult with
                          | Ok result -> Some result.Amount
