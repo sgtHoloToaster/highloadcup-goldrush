@@ -15,12 +15,10 @@ type DiggerMessage = {
 
 let digger (client: Client) (inbox: MailboxProcessor<DiggerMessage>) = 
     let doDig licenseId msg = async {
-        Console.WriteLine("doDig called. license:" + licenseId.ToString() + "body: " + msg.ToString())
         let dig = { LicenseID = licenseId; PosX = msg.PosX; PosY = msg.PosY; Depth = msg.Depth }
         let! treasuresResult = client.PostDig dig
         match treasuresResult with 
         | Error ex -> 
-            Console.WriteLine(ex); 
             match ex with 
             | :? HttpRequestException as ex when ex.StatusCode.HasValue ->
                 match ex.StatusCode.Value with 
@@ -61,7 +59,6 @@ let digger (client: Client) (inbox: MailboxProcessor<DiggerMessage>) =
                        | Error ex -> license
         }
 
-        Console.WriteLine("new license: " + newLicense.ToString())
         return! messageLoop newLicense
     }
 
@@ -77,25 +74,19 @@ let rec explore (client: Client) (diggerAgent: MailboxProcessor<DiggerMessage>) 
 }
 
 let game (client: Client) = async {
-    //let diggerAgents = seq { 
-    //    for _ in 1 .. 10 do
-    //        MailboxProcessor.Start (digger client)
-    //}
-
-    let diggerAgent = MailboxProcessor.Start (digger client)
-    //Console.WriteLine("diggers: " + (diggerAgents |> Seq.length).ToString())
-    //let mutable diggerAgentsEnumerator = diggerAgents.GetEnumerator()
+    let diggersCount = 7
+    let diggerAgents = 
+        [| 1 .. diggersCount|] 
+        |> Seq.map (fun _ -> MailboxProcessor.Start (digger client))
+        |> Seq.toArray
+    
+    Console.WriteLine("diggers: " + (diggerAgents |> Seq.length).ToString())
     for x in 0 .. 3500 do
         for y in 0 .. 3500 do
             let area = { oneBlockArea with PosX = x; PosY = y }
-            //if not (diggerAgentsEnumerator.MoveNext()) then
-            //    diggerAgentsEnumerator.Dispose()
-            //    diggerAgentsEnumerator <- diggerAgents.GetEnumerator()
-            //    diggerAgentsEnumerator.MoveNext() |> ignore
-
-            //let diggerAgent = diggerAgentsEnumerator.Current
+            let diggerAgent = diggerAgents.[y % diggersCount]
             explore client diggerAgent area |> Async.Start
-            do! Async.Sleep(5)
+            do! Async.Sleep(1)
 
     }
 
