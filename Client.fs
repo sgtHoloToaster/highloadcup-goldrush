@@ -28,9 +28,10 @@ let inline processResponse<'T> (response: HttpResponseMessage) =
         return Ok body
     }
 
-type Client(baseUrl) =
-    let client = new HttpClient(Timeout = TimeSpan.FromSeconds(300.0))
-    member private this.Post<'T, 'T1> (url: string) (body: 'T1) = 
+type Client(baseUrl: string) =
+    let persistentClient = new HttpClient(Timeout = TimeSpan.FromSeconds(300.0))
+    let nonPersistentClient = new HttpClient(Timeout = TimeSpan.FromSeconds(30.0))
+    member private this.Post<'T, 'T1> (client: HttpClient) (url: string) (body: 'T1) = 
         async {
             let bodyJson = JsonSerializer.Serialize(body)
             use content = new StringContent(bodyJson, Encoding.UTF8, "application/json")
@@ -47,7 +48,7 @@ type Client(baseUrl) =
                 return Error (ex :> Exception)
         }
 
-    member private this.Get<'T> (url: string) =
+    member private this.Get<'T> (client: HttpClient) (url: string) =
         async {
             try
                 let! response = client.GetAsync(url) |> Async.AwaitTask
@@ -63,29 +64,30 @@ type Client(baseUrl) =
         }
 
     member this.PostLicense (coins: int seq) =  
-        this.Post<License, int seq> (baseUrl + "licenses") coins
+        this.Post<License, int seq> persistentClient (baseUrl + "licenses") coins
 
     member this.GetLicenses() =
-        this.Get<License seq> (baseUrl + "licenses")
+        this.Get<License seq> nonPersistentClient (baseUrl + "licenses")
 
     member this.PostDig (dig: Dig) =
         async {
-            let! response = this.Post<string seq, Dig> (baseUrl + "dig") dig
+            let! response = this.Post<string seq, Dig> nonPersistentClient (baseUrl + "dig") dig
             return match response with 
                    | Ok treasures -> Ok { Priority = 0; Treasures = treasures }
                    | Error err -> Error err
         }
 
     member this.PostCash (treasure: string) =
-        this.Post<int seq, string> (baseUrl + "cash") treasure
+        this.Post<int seq, string> persistentClient (baseUrl + "cash") treasure
 
     member this.PostExplore (area: Area) = 
         async {
-            let! exploreResult = this.Post<ExploreResult, Area> (baseUrl + "explore") area
+            let! exploreResult = this.Post<ExploreResult, Area> nonPersistentClient (baseUrl + "explore") area
             return match exploreResult with
                    | Ok res -> Ok { Amount = res.Amount; Area = res.Area; Priority = 0 }
                    | Error err -> Error err
         }
         
+
     member this.GetBalance() =
-        this.Get<Wallet> (baseUrl + "balance")
+        this.Get<Wallet> nonPersistentClient (baseUrl + "balance")
