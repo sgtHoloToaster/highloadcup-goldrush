@@ -74,7 +74,7 @@ let rec explore (client: Client) (diggerAgent: MailboxProcessor<DiggerMessage>) 
 }
 
 let game (client: Client) = async {
-    let diggersCount = 7
+    let diggersCount = 8
     let diggerAgents = 
         [| 1 .. diggersCount|] 
         |> Seq.map (fun _ -> MailboxProcessor.Start (digger client))
