@@ -15,6 +15,7 @@ type DiggerMessage = {
 
 let digger (client: Client) (inbox: MailboxProcessor<DiggerMessage>) = 
     let inline doDig licenseId msg = async {
+        Console.WriteLine("doDig called. license:" + licenseId.ToString() + "body: " + msg.ToString())
         let dig = { LicenseID = licenseId; PosX = msg.PosX; PosY = msg.PosY; Depth = msg.Depth }
         let! treasuresResult = client.PostDig dig
         match treasuresResult with 
@@ -40,12 +41,11 @@ let digger (client: Client) (inbox: MailboxProcessor<DiggerMessage>) =
         if license.Id.IsNone || license.DigAllowed <= license.DigUsed then
             let! licenseUpdateResult = client.PostLicense Seq.empty<int>
             match licenseUpdateResult with 
-                   | Ok newLicense -> return! messageLoop newLicense
-                   | Error _ -> return! messageLoop license
+                  | Ok newLicense -> Console.WriteLine("new license: " + newLicense.ToString()); return! messageLoop newLicense
+                  | Error _ -> return! messageLoop license
         else
             let! msg = inbox.Receive()
-            if msg.Depth > 1 then
-                Console.WriteLine("received: " + msg.ToString())
+            Console.WriteLine("received: " + msg.ToString())
             if msg.Amount > 0 && msg.Depth <= 10 then
                 doDig license.Id.Value msg |> Async.Start
                 return! messageLoop { license with DigUsed = license.DigUsed + 1 }
@@ -66,7 +66,7 @@ let rec explore (client: Client) (diggerAgent: MailboxProcessor<DiggerMessage>) 
 
 let game (client: Client) = async {
     let diggerAgents = seq { 
-        for i in 1 .. 10 do
+        for _ in 1 .. 10 do
             MailboxProcessor.Start (digger client)
     }
 
