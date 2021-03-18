@@ -24,20 +24,23 @@ let digger (client: Client) (inbox: MailboxProcessor<DiggerMessage>) =
     let doDig msg = async {
         let dig = { LicenseID = license.Id.Value; PosX = msg.PosX; PosY = msg.PosY; Depth = msg.Depth }
         let! treasuresResult = client.PostDig dig
-        Console.WriteLine("dig result: " + treasuresResult.ToString())
         match treasuresResult with 
         | Error _ -> inbox.Post msg // retry
         | Ok treasures when treasures.Treasures |> Seq.length > 0 -> 
+            Console.WriteLine("dig result: " + treasures.ToString())
             for treasure in treasures.Treasures do
                 do! postCash treasure
 
             inbox.Post { msg with Depth = msg.Depth + 1; Amount = msg.Amount - 1 }
-        | _ -> inbox.Post { msg with Depth = msg.Depth + 1 }
+        | Ok treasures -> 
+            Console.WriteLine("dig result: " + treasures.ToString())
+            inbox.Post { msg with Depth = msg.Depth + 1 }
     }
 
     let rec messageLoop() = async {
         let! msg = inbox.Receive()
-        Console.WriteLine("received: " + msg.ToString())
+        if msg.Depth > 1 then
+            Console.WriteLine("received: " + msg.ToString())
         if msg.Amount > 0 && msg.Depth <= 10 then 
             while license.Id.IsNone || license.DigAllowed <= license.DigUsed do
                 let! licenseUpdateResult = client.PostLicense Seq.empty<int>
@@ -63,7 +66,7 @@ let rec explore (client: Client) (diggerAgent: MailboxProcessor<DiggerMessage>) 
 }
 
 let game (client: Client) = async {
-    let diggerAgents = [|0 .. 1000|] |> Seq.map (fun _ -> MailboxProcessor.Start (digger client))
+    let diggerAgents = [|0 .. 10|] |> Seq.map (fun _ -> MailboxProcessor.Start (digger client))
     let mutable diggerAgentsEnumerator = diggerAgents.GetEnumerator()
     for x in 0 .. 3500 do
         for y in 0 .. 3500 do
