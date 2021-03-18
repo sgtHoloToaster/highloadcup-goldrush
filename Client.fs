@@ -29,7 +29,7 @@ let inline processResponse<'T> (response: HttpResponseMessage) =
     }
 
 type Client(baseUrl) =
-    let client = new HttpClient(Timeout = TimeSpan.FromSeconds(10.0))
+    let client = new HttpClient(Timeout = TimeSpan.FromSeconds(100.0))
     member private this.Post<'T, 'T1> (url: string) (body: 'T1) = 
         async {
             let bodyJson = JsonSerializer.Serialize(body)
