@@ -27,11 +27,12 @@ let digger (client: Client) (inbox: MailboxProcessor<DiggerMessage>) =
         Console.WriteLine("dig result: " + treasuresResult.ToString())
         match treasuresResult with 
         | Error _ -> inbox.Post msg // retry
-        | Ok treasures -> 
+        | Ok treasures when treasures.Treasures |> Seq.length > 0 -> 
             for treasure in treasures.Treasures do
                 do! postCash treasure
 
             inbox.Post { msg with Depth = msg.Depth + 1; Amount = msg.Amount - 1 }
+        | _ -> inbox.Post { msg with Depth = msg.Depth + 1 }
     }
 
     let rec messageLoop() = async {
