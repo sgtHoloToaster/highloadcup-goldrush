@@ -15,8 +15,8 @@ type DiggerMessage = {
 
 let digger (client: Client) (inbox: MailboxProcessor<DiggerMessage>) = 
     let rec messageLoop (license: License) = async {
-        let inline doDig msg = async {
-            let dig = { LicenseID = license.Id.Value; PosX = msg.PosX; PosY = msg.PosY; Depth = msg.Depth }
+        let inline doDig licenseId msg = async {
+            let dig = { LicenseID = licenseId; PosX = msg.PosX; PosY = msg.PosY; Depth = msg.Depth }
             let! treasuresResult = client.PostDig dig
             match treasuresResult with 
             | Error ex -> 
@@ -49,7 +49,7 @@ let digger (client: Client) (inbox: MailboxProcessor<DiggerMessage>) =
                        | Error _ -> ()
 
             licenseLocal <- { licenseLocal with DigUsed = licenseLocal.DigUsed + 1 }
-            doDig msg |> Async.Start
+            doDig licenseLocal.Id.Value msg |> Async.Start
             return! messageLoop licenseLocal
         else
             return! messageLoop license
