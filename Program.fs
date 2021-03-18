@@ -14,13 +14,6 @@ type DiggerMessage = {
 let digger (client: Client) (inbox: MailboxProcessor<DiggerMessage>) = 
     let mutable license = { DigAllowed = 0; DigUsed = 0; Id = None }
 
-    let rec postCash treasure = async {
-        let! res = client.PostCash treasure
-        match res with 
-        | Ok _ -> ()
-        | _ -> return! postCash treasure
-    }
-
     let doDig msg = async {
         let dig = { LicenseID = license.Id.Value; PosX = msg.PosX; PosY = msg.PosY; Depth = msg.Depth }
         let! treasuresResult = client.PostDig dig
@@ -72,6 +65,7 @@ let game (client: Client) = async {
             MailboxProcessor.Start (digger client)
     }
 
+    Console.WriteLine("diggers: " + (diggerAgents |> Seq.length).ToString())
     let mutable diggerAgentsEnumerator = diggerAgents.GetEnumerator()
     for x in 0 .. 3500 do
         for y in 0 .. 3500 do
@@ -83,7 +77,7 @@ let game (client: Client) = async {
 
             let diggerAgent = diggerAgentsEnumerator.Current
             explore client diggerAgent area |> Async.Start
-            do! Async.Sleep(100)
+            do! Async.Sleep(5)
 
     }
 
