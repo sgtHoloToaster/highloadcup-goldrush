@@ -26,15 +26,16 @@ let digger (client: Client) (inbox: MailboxProcessor<DiggerMessage>) =
         let! treasuresResult = client.PostDig dig
         match treasuresResult with 
         | Error _ -> inbox.Post msg // retry
-        | Ok treasures when treasures.Treasures |> Seq.length > 0 -> 
-            Console.WriteLine("dig result: " + treasures.ToString())
-            for treasure in treasures.Treasures do
-                do! postCash treasure
-
-            inbox.Post { msg with Depth = msg.Depth + 1; Amount = msg.Amount - 1 }
         | Ok treasures -> 
             Console.WriteLine("dig result: " + treasures.ToString())
-            inbox.Post { msg with Depth = msg.Depth + 1 }
+            let mutable left = msg.Amount
+            for treasure in treasures.Treasures do
+                let! result = client.PostCash treasure
+                match result with 
+                | Ok _ -> left <- left - 1
+                | _ -> ()
+
+            inbox.Post { msg with Depth = msg.Depth + 1; Amount = left }
     }
 
     let rec messageLoop() = async {
@@ -66,7 +67,7 @@ let rec explore (client: Client) (diggerAgent: MailboxProcessor<DiggerMessage>) 
 }
 
 let game (client: Client) = async {
-    let diggerAgents = [|0 .. 10|] |> Seq.map (fun _ -> MailboxProcessor.Start (digger client))
+    let diggerAgents = [|0 .. 9|] |> Seq.map (fun _ -> MailboxProcessor.Start (digger client))
     let mutable diggerAgentsEnumerator = diggerAgents.GetEnumerator()
     for x in 0 .. 3500 do
         for y in 0 .. 3500 do
