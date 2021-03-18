@@ -6,6 +6,11 @@ open Client
 open System.Net.Http
 open System.Net
 
+type Coordinates = {
+    PosX: int
+    PosY: int
+}
+
 type DiggerMessage = {
     PosX: int
     PosY: int
@@ -64,13 +69,14 @@ let digger (client: Client) (inbox: MailboxProcessor<DiggerMessage>) =
 
     messageLoop { Id = None; DigAllowed = 0; DigUsed = 0 }
 
-let rec explore (client: Client) (diggerAgent: MailboxProcessor<DiggerMessage>) (area: Area) = async {
+let rec exploreAndDig (client: Client) (diggerAgent: MailboxProcessor<DiggerMessage>) (coordinates: Coordinates) = async {
+    let area = { oneBlockArea with PosX = coordinates.PosX; PosY = coordinates.PosY }
     let! result = client.PostExplore(area)
     match result with 
     | Ok exploreResult when exploreResult.Amount > 0 -> 
         diggerAgent.Post { PosX = exploreResult.Area.PosX; PosY = exploreResult.Area.PosY; Depth = 1; Amount = exploreResult.Amount }
     | Ok _ -> ()
-    | Error _ -> return! explore client diggerAgent area
+    | Error _ -> return! exploreAndDig client diggerAgent coordinates
 }
 
 let createDiggerAgentsPool client diggerAgentsCount = 
@@ -86,7 +92,11 @@ let createDiggerAgentsPool client diggerAgentsCount =
             yield! next()
         }
 
-    next()
+    let enumerator = next().GetEnumerator()
+    fun () -> 
+        match enumerator.MoveNext() with
+        | true -> enumerator.Current
+        | false -> raise (InvalidOperationException("Infinite enumerator is not infinite"))
 
 let game (client: Client) = async {
     let diggersCount = 8
@@ -100,9 +110,9 @@ let game (client: Client) = async {
 
     for x in 0 .. 3500 do
         for y in 0 .. 3500 do
-            let area = { oneBlockArea with PosX = x; PosY = y }
-            let diggerAgent = Seq.head diggerAgentsPool
-            explore client diggerAgent area |> Async.Start
+            let coordinates = { PosX = x; PosY = y }
+            let diggerAgent = diggerAgentsPool()
+            exploreAndDig client diggerAgent coordinates |> Async.Start
             do! Async.Sleep(1)
 
     }
@@ -114,5 +124,4 @@ let main argv =
     Console.WriteLine("host: " + urlEnv)
     let client = new Client.Client("http://" + urlEnv + ":8000/")
     game client |> Async.RunSynchronously |> ignore
-    Console.WriteLine("ended")
     0 // return an integer exit code
