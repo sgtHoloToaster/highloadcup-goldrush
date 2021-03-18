@@ -94,7 +94,7 @@ let game (client: Client) = async {
             //    diggerAgentsEnumerator.MoveNext() |> ignore
 
             //let diggerAgent = diggerAgentsEnumerator.Current
-            do! explore client diggerAgent area
+            explore client diggerAgent area |> Async.Start
             do! Async.Sleep(5)
 
     }
