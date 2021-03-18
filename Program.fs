@@ -77,6 +77,7 @@ let createDiggerAgentsPool client diggerAgentsCount =
     let diggerAgents = 
         [| 1 .. diggerAgentsCount|] 
         |> Seq.map (fun _ -> MailboxProcessor.Start (digger client))
+        |> Seq.toArray
 
     let rec next () = 
         seq {
