@@ -14,7 +14,7 @@ type DiggerMessage = {
 }
 
 let digger (client: Client) (inbox: MailboxProcessor<DiggerMessage>) = 
-    let inline doDig licenseId msg = async {
+    let doDig licenseId msg = async {
         Console.WriteLine("doDig called. license:" + licenseId.ToString() + "body: " + msg.ToString())
         let dig = { LicenseID = licenseId; PosX = msg.PosX; PosY = msg.PosY; Depth = msg.Depth }
         let! treasuresResult = client.PostDig dig
@@ -26,31 +26,40 @@ let digger (client: Client) (inbox: MailboxProcessor<DiggerMessage>) =
             | _ -> inbox.Post msg // retry
         | Ok treasures -> 
             Console.WriteLine("dig result: " + treasures.ToString())
-            let mutable left = msg.Amount
-            for treasure in treasures.Treasures do
-                let! result = client.PostCash treasure
-                match result with 
-                | Ok _ -> left <- left - 1
-                | _ -> ()
+            let digged = 
+                treasures.Treasures 
+                |> Seq.map (
+                    fun treasure -> async {
+                        let! result = client.PostCash treasure
+                        return match result with 
+                                | Ok _ -> 1
+                                | _ -> 0
+                })
+                |> Async.Parallel
+                |> Async.RunSynchronously
+                |> Seq.sum
 
-            let depth = msg.Depth + 1
-            inbox.Post ({ msg with Depth = depth; Amount = left })
+            inbox.Post ({ msg with Depth = msg.Depth + 1; Amount = msg.Amount - digged })
     }
 
     let rec messageLoop (license: License) = async {
-        if license.Id.IsNone || license.DigAllowed <= license.DigUsed then
-            let! licenseUpdateResult = client.PostLicense Seq.empty<int>
-            match licenseUpdateResult with 
-                  | Ok newLicense -> Console.WriteLine("new license: " + newLicense.ToString()); return! messageLoop newLicense
-                  | Error _ -> return! messageLoop license
-        else
-            let! msg = inbox.Receive()
-            Console.WriteLine("received: " + msg.ToString())
-            if msg.Amount > 0 && msg.Depth <= 10 then
-                doDig license.Id.Value msg |> Async.Start
-                return! messageLoop { license with DigUsed = license.DigUsed + 1 }
-            else
-                return! messageLoop license
+        let! newLicense = async {
+            if license.Id.IsSome && license.DigAllowed > license.DigUsed then
+                let! msg = inbox.Receive()
+                if msg.Amount > 0 && msg.Depth <= 10 then
+                    doDig license.Id.Value msg |> Async.Start
+                    return { license with DigUsed = license.DigUsed + 1 }
+                else
+                    return license
+            else 
+                let! licenseUpdateResult = client.PostLicense Seq.empty<int>
+                return match licenseUpdateResult with 
+                       | Ok newLicense -> newLicense
+                       | Error ex -> license
+        }
+
+        Console.WriteLine("new license: " + newLicense.ToString())
+        return! messageLoop newLicense
     }
 
     messageLoop { Id = None; DigAllowed = 0; DigUsed = 0 }
@@ -65,23 +74,24 @@ let rec explore (client: Client) (diggerAgent: MailboxProcessor<DiggerMessage>) 
 }
 
 let game (client: Client) = async {
-    let diggerAgents = seq { 
-        for _ in 1 .. 10 do
-            MailboxProcessor.Start (digger client)
-    }
+    //let diggerAgents = seq { 
+    //    for _ in 1 .. 10 do
+    //        MailboxProcessor.Start (digger client)
+    //}
 
-    Console.WriteLine("diggers: " + (diggerAgents |> Seq.length).ToString())
-    let mutable diggerAgentsEnumerator = diggerAgents.GetEnumerator()
+    let diggerAgent = MailboxProcessor.Start (digger client)
+    //Console.WriteLine("diggers: " + (diggerAgents |> Seq.length).ToString())
+    //let mutable diggerAgentsEnumerator = diggerAgents.GetEnumerator()
     for x in 0 .. 3500 do
         for y in 0 .. 3500 do
             let area = { oneBlockArea with PosX = x; PosY = y }
-            if not (diggerAgentsEnumerator.MoveNext()) then
-                diggerAgentsEnumerator.Dispose()
-                diggerAgentsEnumerator <- diggerAgents.GetEnumerator()
-                diggerAgentsEnumerator.MoveNext() |> ignore
+            //if not (diggerAgentsEnumerator.MoveNext()) then
+            //    diggerAgentsEnumerator.Dispose()
+            //    diggerAgentsEnumerator <- diggerAgents.GetEnumerator()
+            //    diggerAgentsEnumerator.MoveNext() |> ignore
 
-            let diggerAgent = diggerAgentsEnumerator.Current
-            explore client diggerAgent area |> Async.Start
+            //let diggerAgent = diggerAgentsEnumerator.Current
+            do! explore client diggerAgent area
             do! Async.Sleep(5)
 
     }
