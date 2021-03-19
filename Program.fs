@@ -22,6 +22,7 @@ type ExplorerMessage = {
     SizeX: int
     SizeY: int
     Amount: Option<int>
+    Retry: int
 }
 
 type DiggerMessage = {
@@ -136,30 +137,32 @@ let explorer (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<Digger
         let! msg = inbox.Receive()
         Console.WriteLine("received: " + msg.ToString())
         match msg.SizeX, msg.SizeY, msg.Amount with 
-        | _, _, Some 0 -> Console.WriteLine(1)
+        | _, _, Some 0 -> ()
         | sizeX, sizeY, Some amount when sizeX > digAreaSize.SizeX || sizeY > digAreaSize.SizeY ->
             let maxPosX = msg.PosX + sizeX;
             let maxPosY = msg.PosY + sizeY;
             let stepX = digAreaSize.SizeX
             let stepY = digAreaSize.SizeY
-            for xx in msg.PosX .. stepX .. maxPosX do
-                for yy in msg.PosY .. stepY .. maxPosY do
+            for x in msg.PosX .. stepX .. maxPosX do
+                for y in msg.PosY .. stepY .. maxPosY do
                     let newMsg = { 
-                        PosX = xx
-                        PosY = yy 
-                        SizeX = Math.Min(stepX, maxPosX - xx)
-                        SizeY = Math.Min(stepY, maxPosY - yy) 
-                        Amount = Some amount 
+                        PosX = x
+                        PosY = y 
+                        SizeX = Math.Min(stepX, maxPosX - x)
+                        SizeY = Math.Min(stepY, maxPosY - y) 
+                        Amount = Some amount
+                        Retry = 0
                     }
                     inbox.Post newMsg
         | _, _, Some amount ->
             do! exploreAndDigArea { PosX = msg.PosX; PosY = msg.PosY; SizeX = msg.SizeX; SizeY = msg.SizeY } amount { PosX = msg.PosX; PosY = msg.PosY }
         | _, _, None ->
             let! exploreResult = exploreArea { PosX = msg.PosX; PosY = msg.PosY; SizeX = msg.SizeX; SizeY = msg.SizeY }
-            let amount = match exploreResult with
-                         | Ok result -> Some result.Amount
-                         | _ -> None
-            inbox.Post { msg with Amount = amount }
+            match exploreResult with
+            | Ok result when result.Amount > 0 -> inbox.Post { msg with Amount = Some result.Amount }
+            | Error _ when msg.Retry < 3 -> inbox.Post { msg with Retry = msg.Retry + 1 }
+            | _ -> ()
+            
 
         return! messageLoop()
     }
@@ -187,7 +190,7 @@ let createAgentsPool<'Msg> (body: MailboxProcessor<'Msg> -> Async<unit>) agentsC
 
 let game (client: Client) = async {
     let diggersCount = 8
-    let explorersCount = 100
+    let explorersCount = 1000
     let diggerAgentsPool = createAgentsPool (digger client) diggersCount
     Console.WriteLine("diggers: " + diggersCount.ToString())
 
@@ -196,11 +199,11 @@ let game (client: Client) = async {
     | Ok licenses -> Console.WriteLine(licenses)
     | Error ex -> Console.WriteLine("Error loading licenses: " + ex.ToString())
 
-    let digAreaSize = { SizeX = 2; SizeY = 2 }
+    let digAreaSize = { SizeX = 5; SizeY = 1 }
     let explorerAgentsPool = createAgentsPool (explorer client diggerAgentsPool digAreaSize) explorersCount
-    for x in 0 .. digAreaSize.SizeX .. 3500 do
-        for y in 0 .. digAreaSize.SizeY .. 3500 do
-            let msg = { PosX = x; PosY = y; SizeX = digAreaSize.SizeX; SizeY = digAreaSize.SizeY; Amount = None }
+    for x in 0 .. digAreaSize.SizeX * 3 .. 3500 do
+        for y in 0 .. digAreaSize.SizeY * 3 .. 3500 do
+            let msg = { PosX = x; PosY = y; SizeX = digAreaSize.SizeX; SizeY = digAreaSize.SizeY; Amount = None; Retry = 0 }
             explorerAgentsPool().Post msg
             do! Async.Sleep(10)
 
