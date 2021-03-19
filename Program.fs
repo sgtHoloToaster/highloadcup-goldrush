@@ -32,7 +32,12 @@ type DiggerMessage = {
     Amount: int
 }
 
-let digger (client: Client) (inbox: MailboxProcessor<DiggerMessage>) = 
+type TreasureRetryMessage = {
+    Treasure: string
+    Retry: int
+}
+
+let digger (client: Client) (treasureResender: MailboxProcessor<TreasureRetryMessage>) (inbox: MailboxProcessor<DiggerMessage>) = 
     let inline doDig licenseId msg = async {
         let dig = { LicenseID = licenseId; PosX = msg.PosX; PosY = msg.PosY; Depth = msg.Depth }
         let! treasuresResult = client.PostDig dig
@@ -53,7 +58,7 @@ let digger (client: Client) (inbox: MailboxProcessor<DiggerMessage>) =
                         let! result = client.PostCash treasure
                         return match result with 
                                 | Ok _ -> 1
-                                | _ -> 0
+                                | _ -> treasureResender.Post { Treasure = treasure; Retry = 0 }; 0
                 })
                 |> Async.Parallel
                 |> Async.RunSynchronously
@@ -94,17 +99,17 @@ let explorer (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<Digger
     //    | Error _ -> return! exploreAndDig coordinates
     //}
 
-    let rec inline exploreArea (area: Area) = async {
+    let rec exploreArea (area: Area) = async {
         let! exploreResult = client.PostExplore(area)
         match exploreResult with 
         | Ok _ -> return  exploreResult
         | Error _ -> return! exploreArea area
     }
 
-    let rec inline exploreOneBlock (coordinates: Coordinates) = 
+    let rec exploreOneBlock (coordinates: Coordinates) = 
         exploreArea { oneBlockArea with PosX = coordinates.PosX; PosY = coordinates.PosY }
 
-    let rec inline exploreAndDigArea (area: Area) (amount: int) (currentCoordinates: Coordinates) = async {
+    let rec exploreAndDigArea (area: Area) (amount: int) (currentCoordinates: Coordinates) = async {
         if amount = 0 then 
             return ()
 
@@ -138,16 +143,14 @@ let explorer (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<Digger
         | _ -> ()
     }
 
-    let rec messageLoop() = async {
-        let! msg = inbox.Receive()
-        Console.WriteLine("received: " + msg.ToString())
+    let inline processMessage (msg: ExplorerMessage) = async {
         match msg.SizeX, msg.SizeY, msg.Amount with 
         | _, _, Some 0 -> ()
-        | sizeX, sizeY, Some amount when sizeX > digAreaSize.SizeX || sizeY > digAreaSize.SizeY ->
+        | sizeX, sizeY, Some _ when sizeX > digAreaSize.SizeX || sizeY > digAreaSize.SizeY ->
             let maxPosX = msg.PosX + sizeX;
             let maxPosY = msg.PosY + sizeY;
-            let stepX = digAreaSize.SizeX
-            let stepY = digAreaSize.SizeY
+            let stepX = Math.Max(msg.SizeX / 2, digAreaSize.SizeX)
+            let stepY = Math.Max(msg.SizeY / 2, digAreaSize.SizeY)
             let maxIterX = maxPosX - stepX
             let maxIterY = maxPosY - stepY
             for x in msg.PosX .. stepX .. maxIterX do
@@ -157,7 +160,7 @@ let explorer (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<Digger
                         PosY = y 
                         SizeX = Math.Min(stepX, maxPosX - x)
                         SizeY = Math.Min(stepY, maxPosY - y) 
-                        Amount = Some amount
+                        Amount = None
                         Retry = 0
                     }
                     inbox.Post newMsg
@@ -165,11 +168,39 @@ let explorer (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<Digger
             exploreAndDigArea { PosX = msg.PosX; PosY = msg.PosY; SizeX = msg.SizeX; SizeY = msg.SizeY } amount { PosX = msg.PosX; PosY = msg.PosY } |> Async.Start
         | _, _, None ->
             exploreMessageArea msg |> Async.Start
-            
+    }
 
+    let rec messageLoop() = async {
+        let! priorityMessage = inbox.TryScan((fun msg ->
+            match msg.Amount with
+            | Some _ -> (Some (async { return msg }))
+            | None -> None), 0)
+
+        let! msg = async {
+            match priorityMessage with
+            | Some prMsg -> return prMsg
+            | _ -> return! inbox.Receive()
+        }
+
+        Console.WriteLine("received: " + msg.ToString())
+        do! processMessage msg
+            
         return! messageLoop()
     }
 
+    messageLoop()
+
+let treasureResender (client: Client) (inbox: MailboxProcessor<TreasureRetryMessage>) =
+    let rec messageLoop() = async {
+        let! msg = inbox.Receive()
+        let! result = client.PostCash msg.Treasure
+        match result, msg.Retry with
+        | Ok _, _ -> ()
+        | Error _, 3 -> ()
+        | _ -> inbox.Post { msg with Retry = msg.Retry + 1 }
+    }
+        
+    
     messageLoop()
 
 let inline createAgentsPool<'Msg> (body: MailboxProcessor<'Msg> -> Async<unit>) agentsCount = 
@@ -191,10 +222,11 @@ let inline createAgentsPool<'Msg> (body: MailboxProcessor<'Msg> -> Async<unit>) 
         | true -> enumerator.Current
         | false -> raise (InvalidOperationException("Infinite enumerator is not infinite"))
 
-let game (client: Client) = async {
+let inline game (client: Client) = async {
     let diggersCount = 8
-    let explorersCount = 10
-    let diggerAgentsPool = createAgentsPool (digger client) diggersCount
+    let explorersCount = 1000
+    let treasureResenderAgent = MailboxProcessor.Start (treasureResender client)
+    let diggerAgentsPool = createAgentsPool (digger client treasureResenderAgent) diggersCount
     Console.WriteLine("diggers: " + diggersCount.ToString())
 
     let digAreaSize = { SizeX = 5; SizeY = 1 }
@@ -203,9 +235,9 @@ let game (client: Client) = async {
     let maxIterX = 3500 - stepX;
     let maxIterY = 3500 - stepY;
     let explorerAgentsPool = createAgentsPool (explorer client diggerAgentsPool digAreaSize) explorersCount
-    for x in 0 .. digAreaSize.SizeX * 3 .. maxIterX do
-        for y in 0 .. digAreaSize.SizeY * 3 .. maxIterY do
-            let msg = { PosX = x; PosY = y; SizeX = digAreaSize.SizeX; SizeY = digAreaSize.SizeY; Amount = None; Retry = 0 }
+    for x in 0 .. stepX .. maxIterX do
+        for y in 0 .. stepY .. maxIterY do
+            let msg = { PosX = x; PosY = y; SizeX = stepX; SizeY = stepY; Amount = None; Retry = 0 }
             explorerAgentsPool().Post msg
             do! Async.Sleep(10)
 
