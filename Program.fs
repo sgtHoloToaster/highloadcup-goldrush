@@ -16,6 +16,12 @@ type Coordinates = {
     PosY: int
 }
 
+type TreasureReportMessage = {
+    Depth: int
+    Coins: int
+}
+
+
 type ExplorerMessage = {
     PosX: int
     PosY: int
@@ -25,19 +31,24 @@ type ExplorerMessage = {
     Retry: int
 }
 
-type DiggerMessage = {
+type DiggerDigMessage = {
     PosX: int
     PosY: int
     Depth: int
     Amount: int
 }
 
+type DiggerMessage = DiggerDigMessage of DiggerDigMessage | DiggerOptimalDepthMessage of int
+
+
+type DiggingDepthOptimizerMessage = TreasureReport of TreasureReportMessage | DiggerRegistration of MailboxProcessor<DiggerMessage>
+
 type TreasureRetryMessage = {
     Treasure: string
     Retry: int
 }
 
-let digger (client: Client) (treasureResender: MailboxProcessor<TreasureRetryMessage>) (inbox: MailboxProcessor<DiggerMessage>) = 
+let digger (client: Client) (treasureResender: MailboxProcessor<TreasureRetryMessage>) (diggingDepthOptimizer: MailboxProcessor<DiggingDepthOptimizerMessage>) (inbox: MailboxProcessor<DiggerMessage>) = 
     let inline doDig licenseId msg = async {
         let dig = { LicenseID = licenseId; PosX = msg.PosX; PosY = msg.PosY; Depth = msg.Depth }
         let! treasuresResult = client.PostDig dig
@@ -46,10 +57,10 @@ let digger (client: Client) (treasureResender: MailboxProcessor<TreasureRetryMes
             match ex with 
             | :? HttpRequestException as ex when ex.StatusCode.HasValue ->
                 match ex.StatusCode.Value with 
-                | HttpStatusCode.NotFound -> inbox.Post { msg with Depth = msg.Depth + 1 }
+                | HttpStatusCode.NotFound -> inbox.Post (DiggerMessage.DiggerDigMessage ({ msg with Depth = msg.Depth + 1 }))
                 | HttpStatusCode.UnprocessableEntity -> ()
-                | _ -> inbox.Post msg // retry
-            | _ -> inbox.Post msg // retry
+                | _ -> inbox.Post (DiggerMessage.DiggerDigMessage (msg)) // retry
+            | _ -> inbox.Post (DiggerMessage.DiggerDigMessage (msg)) // retry
         | Ok treasures -> 
             let digged = 
                 treasures.Treasures 
@@ -57,36 +68,55 @@ let digger (client: Client) (treasureResender: MailboxProcessor<TreasureRetryMes
                     fun treasure -> async {
                         let! result = client.PostCash treasure
                         return match result with 
-                               | Ok _ -> 1
+                               | Ok coins -> diggingDepthOptimizer.Post (DiggingDepthOptimizerMessage.TreasureReport { Depth = msg.Depth; Coins = coins |> Seq.length }); 1
                                | _ -> treasureResender.Post { Treasure = treasure; Retry = 0 }; 1
-                })
+                    })
                 |> Async.Parallel
                 |> Async.RunSynchronously
                 |> Seq.sum
 
-            inbox.Post ({ msg with Depth = msg.Depth + 1; Amount = msg.Amount - digged })
+            inbox.Post (DiggerMessage.DiggerDigMessage (({ msg with Depth = msg.Depth + 1; Amount = msg.Amount - digged })))
     }
 
-    let rec messageLoop (license: License) = async {
-        let! newLicense = async {
+    let rec messageLoop (license: License) (optimalDepth: int option): Async<unit> = async {
+        let! (newLicense, optimalDepth) = async {
             if license.Id.IsSome && license.DigAllowed > license.DigUsed then
-                let! msg = inbox.Receive()
-                if msg.Amount > 0 && msg.Depth <= 10 then
-                    doDig license.Id.Value msg |> Async.Start
-                    return { license with DigUsed = license.DigUsed + 1 }
-                else
-                    return license
+                let! priorityMessage = async {
+                    if optimalDepth.IsSome then 
+                        return! inbox.TryScan((fun msg ->
+                            match msg with
+                            | DiggerMessage.DiggerDigMessage digMsg when digMsg.Depth <= optimalDepth.Value -> (Some (async { return msg }))
+                            | _ -> None), 0)
+                    else return None
+                }
+
+                let! msg = async {
+                    match priorityMessage with
+                    | Some priorityMessage -> return priorityMessage
+                    | _ -> return! inbox.Receive()
+                }
+
+                match msg with
+                | DiggerDigMessage digMsg ->
+                    if digMsg.Amount > 0 && digMsg.Depth <= 10 then
+                        doDig license.Id.Value digMsg |> Async.Start
+                        return { license with DigUsed = license.DigUsed + 1 }, optimalDepth
+                    else
+                        return license, optimalDepth
+                | DiggerOptimalDepthMessage optimalDepth ->
+                    return license, (Some optimalDepth)
             else 
                 let! licenseUpdateResult = client.PostLicense Seq.empty<int>
                 return match licenseUpdateResult with 
-                       | Ok newLicense -> newLicense
-                       | Error ex -> license
+                       | Ok newLicense -> newLicense, optimalDepth
+                       | Error ex -> license, optimalDepth
         }
 
-        return! messageLoop newLicense
+        return! messageLoop newLicense optimalDepth
     }
 
-    messageLoop { Id = None; DigAllowed = 0; DigUsed = 0 }
+    diggingDepthOptimizer.Post (DiggingDepthOptimizerMessage.DiggerRegistration inbox)
+    messageLoop { Id = None; DigAllowed = 0; DigUsed = 0 } None
 
 let explorer (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<DiggerMessage>) (digAreaSize: AreaSize) (inbox: MailboxProcessor<ExplorerMessage>) =
     let rec exploreArea (area: Area) = async {
@@ -107,7 +137,7 @@ let explorer (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<Digger
         let left = 
             match result with
             | Ok exploreResult when exploreResult.Amount > 0 -> 
-                diggerAgentsPool().Post { PosX = exploreResult.Area.PosX; PosY = exploreResult.Area.PosY; Amount = exploreResult.Amount; Depth = 1 }
+                diggerAgentsPool().Post (DiggerMessage.DiggerDigMessage ({ PosX = exploreResult.Area.PosX; PosY = exploreResult.Area.PosY; Amount = exploreResult.Amount; Depth = 1 }))
                 amount - exploreResult.Amount
             | _ -> amount
             
@@ -172,7 +202,7 @@ let explorer (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<Digger
             | _ -> return! inbox.Receive()
         }
 
-        Console.WriteLine("received: " + msg.ToString())
+        //Console.WriteLine("received: " + msg.ToString())
         do! processMessage msg
             
         return! messageLoop()
@@ -231,6 +261,34 @@ let inline generateRange (startNumber: int) (increasePattern: int seq) (endNumbe
         
     increase startNumber
 
+let diggingDepthOptimizer (inbox: MailboxProcessor<DiggingDepthOptimizerMessage>) =
+    let rec messageLoop (diggers: MailboxProcessor<DiggerMessage> seq) (treasuresCost: Map<int, int>) = async {
+        if treasuresCost.Count = 10 then
+            Console.WriteLine(treasuresCost |> Seq.sortBy (fun kv -> kv.Key) 
+                                            |> Seq.map (fun kv -> kv.Value.ToString())
+                                            |> (fun f -> String.concat "," (f |> Seq.toArray)))
+            let optimalDepth = treasuresCost |> Seq.sortBy (fun kv -> kv.Key) 
+                                             |> Seq.last
+            for digger in diggers do
+                digger.Post (DiggerMessage.DiggerOptimalDepthMessage optimalDepth.Value)
+            return ()
+
+        let! msg = inbox.Receive()
+        let newDiggers, newTreasuresCost = 
+            match msg with 
+            | DiggingDepthOptimizerMessage.TreasureReport treasuresMsg ->
+                let newTreasuresCost = 
+                    if treasuresCost.ContainsKey treasuresMsg.Depth then treasuresCost
+                    else treasuresCost.Add(treasuresMsg.Depth, treasuresMsg.Coins)
+                diggers, newTreasuresCost
+            | DiggingDepthOptimizerMessage.DiggerRegistration digger ->
+                 diggers |> Seq.append [digger], treasuresCost
+
+        return! messageLoop newDiggers newTreasuresCost
+    }
+        
+    messageLoop Seq.empty Map.empty
+
 let inline exploreField (explorerAgentsPool: (unit -> MailboxProcessor<ExplorerMessage>)) (timeout: int) (startCoordinates: Coordinates) (endCoordinates: Coordinates) (stepX: int) (stepY: int) = async {
     let maxPosX = endCoordinates.PosX - stepX
     let maxPosY = endCoordinates.PosY - stepY
@@ -245,7 +303,8 @@ let inline game (client: Client) = async {
     let diggersCount = 8
     let explorersCount = 1000
     let treasureResenderAgent = MailboxProcessor.Start (treasureResender client)
-    let diggerAgentsPool = createAgentsPool (digger client treasureResenderAgent) diggersCount
+    let diggingDepthOptimizerAgent = MailboxProcessor.Start (diggingDepthOptimizer)
+    let diggerAgentsPool = createAgentsPool (digger client treasureResenderAgent diggingDepthOptimizerAgent) diggersCount
     Console.WriteLine("diggers: " + diggersCount.ToString())
 
     let digAreaSize = { SizeX = 5; SizeY = 1 }
