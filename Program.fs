@@ -198,6 +198,8 @@ let treasureResender (client: Client) (inbox: MailboxProcessor<TreasureRetryMess
         | Ok _, _ -> ()
         | Error _, 3 -> ()
         | _ -> inbox.Post { msg with Retry = msg.Retry + 1 }
+
+        return! messageLoop()
     }
         
     
