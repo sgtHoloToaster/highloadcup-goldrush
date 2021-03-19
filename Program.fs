@@ -57,8 +57,8 @@ let digger (client: Client) (treasureResender: MailboxProcessor<TreasureRetryMes
                     fun treasure -> async {
                         let! result = client.PostCash treasure
                         return match result with 
-                                | Ok _ -> 1
-                                | _ -> treasureResender.Post { Treasure = treasure; Retry = 0 }; 0
+                               | Ok _ -> 1
+                               | _ -> treasureResender.Post { Treasure = treasure; Retry = 0 }; 1
                 })
                 |> Async.Parallel
                 |> Async.RunSynchronously
@@ -89,16 +89,6 @@ let digger (client: Client) (treasureResender: MailboxProcessor<TreasureRetryMes
     messageLoop { Id = None; DigAllowed = 0; DigUsed = 0 }
 
 let explorer (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<DiggerMessage>) (digAreaSize: AreaSize) (inbox: MailboxProcessor<ExplorerMessage>) =
-    //let rec exploreAndDig (coordinates: Coordinates) = async {
-    //    let area = { oneBlockArea with PosX = coordinates.PosX; PosY = coordinates.PosY }
-    //    let! result = client.PostExplore(area)
-    //    match result with 
-    //    | Ok exploreResult when exploreResult.Amount > 0 -> 
-    //        diggerAgentsPool().Post { PosX = exploreResult.Area.PosX; PosY = exploreResult.Area.PosY; Depth = 1; Amount = exploreResult.Amount }
-    //    | Ok _ -> ()
-    //    | Error _ -> return! exploreAndDig coordinates
-    //}
-
     let rec exploreArea (area: Area) = async {
         let! exploreResult = client.PostExplore(area)
         match exploreResult with 
@@ -149,8 +139,8 @@ let explorer (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<Digger
         | sizeX, sizeY, Some _ when sizeX > digAreaSize.SizeX || sizeY > digAreaSize.SizeY ->
             let maxPosX = msg.PosX + sizeX;
             let maxPosY = msg.PosY + sizeY;
-            let stepX = Math.Max(msg.SizeX / 2, digAreaSize.SizeX)
-            let stepY = Math.Max(msg.SizeY / 2, digAreaSize.SizeY)
+            let stepX = digAreaSize.SizeX
+            let stepY = digAreaSize.SizeY
             let maxIterX = maxPosX - stepX
             let maxIterY = maxPosY - stepY
             for x in msg.PosX .. stepX .. maxIterX do
@@ -202,19 +192,13 @@ let treasureResender (client: Client) (inbox: MailboxProcessor<TreasureRetryMess
         return! messageLoop()
     }
         
-    
     messageLoop()
 
-let inline createAgentsPool<'Msg> (body: MailboxProcessor<'Msg> -> Async<unit>) agentsCount = 
-    let agents = 
-        [| 1 .. agentsCount|] 
-        |> Seq.map (fun _ -> MailboxProcessor.Start body)
-        |> Seq.toArray
-
+let inline infiniteEnumerator elements = 
     let rec next () = 
         seq {
-            for agent in agents do
-                yield agent
+            for element in elements do
+                yield element
             yield! next()
         }
 
@@ -224,6 +208,39 @@ let inline createAgentsPool<'Msg> (body: MailboxProcessor<'Msg> -> Async<unit>) 
         | true -> enumerator.Current
         | false -> raise (InvalidOperationException("Infinite enumerator is not infinite"))
 
+let inline createAgentsPool<'Msg> (body: MailboxProcessor<'Msg> -> Async<unit>) agentsCount = 
+    let agents = 
+        [| 1 .. agentsCount|] 
+        |> Seq.map (fun _ -> MailboxProcessor.Start body)
+        |> Seq.toArray
+
+    infiniteEnumerator agents
+
+let inline generateRange (startNumber: int) (increasePattern: int seq) (endNumber: int) = 
+    let enumerator = infiniteEnumerator increasePattern
+    let rec increase current = seq {
+        let step = enumerator()
+        let newCurrent = current + step
+        if newCurrent > endNumber then
+            yield (current, endNumber - current)
+        else
+            yield (newCurrent, step)
+            if newCurrent <> endNumber then
+                yield! increase newCurrent
+    }
+        
+    increase startNumber
+
+let inline exploreField (explorerAgentsPool: (unit -> MailboxProcessor<ExplorerMessage>)) (timeout: int) (startCoordinates: Coordinates) (endCoordinates: Coordinates) (stepX: int) (stepY: int) = async {
+    let maxPosX = endCoordinates.PosX - stepX
+    let maxPosY = endCoordinates.PosY - stepY
+    for x in startCoordinates.PosX .. stepX .. maxPosX do
+        for y in startCoordinates.PosY .. stepY .. maxPosY do
+            let msg = { PosX = x; PosY = y; SizeX = stepX; SizeY = stepY; Amount = None; Retry = 0 }
+            explorerAgentsPool().Post msg
+            do! Async.Sleep(timeout)
+    }
+
 let inline game (client: Client) = async {
     let diggersCount = 8
     let explorersCount = 1000
@@ -232,18 +249,8 @@ let inline game (client: Client) = async {
     Console.WriteLine("diggers: " + diggersCount.ToString())
 
     let digAreaSize = { SizeX = 5; SizeY = 1 }
-    let stepX = digAreaSize.SizeX;
-    let stepY = digAreaSize.SizeY;
-    let maxIterX = 3500 - stepX;
-    let maxIterY = 3500 - stepY;
     let explorerAgentsPool = createAgentsPool (explorer client diggerAgentsPool digAreaSize) explorersCount
-    for x in 0 .. stepX .. maxIterX do
-        for y in 0 .. stepY .. maxIterY do
-            let msg = { PosX = x; PosY = y; SizeX = stepX; SizeY = stepY; Amount = None; Retry = 0 }
-            explorerAgentsPool().Post msg
-            do! Async.Sleep(10)
-
-
+    do! exploreField explorerAgentsPool 10 { PosX = 0; PosY = 0 } { PosX = 3500; PosY = 3500 } 5 1
     do! Async.Sleep(Int32.MaxValue)
 }
 
