@@ -5,7 +5,6 @@ open System.Text.Json
 open System.Text
 open Models
 open System
-open System.Net
 open System.Text.Json.Serialization
 
 type ExploreResult = {

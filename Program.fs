@@ -48,7 +48,7 @@ type TreasureRetryMessage = {
 }
 
 let digger (client: Client) (treasureResender: MailboxProcessor<TreasureRetryMessage>) (diggingDepthOptimizer: MailboxProcessor<DiggingDepthOptimizerMessage>) (inbox: MailboxProcessor<DiggerMessage>) = 
-    let inline doDig licenseId msg = async {
+    let inline doDig licenseId msg (optimalDepth: int option) = async {
         let dig = { LicenseID = licenseId; PosX = msg.PosX; PosY = msg.PosY; Depth = msg.Depth }
         let! treasuresResult = client.PostDig dig
         match treasuresResult with 
@@ -74,7 +74,7 @@ let digger (client: Client) (treasureResender: MailboxProcessor<TreasureRetryMes
                 |> Async.RunSynchronously
                 |> Seq.sum
 
-            inbox.Post (DiggerMessage.DiggerDigMessage (({ msg with Depth = msg.Depth + 1; Amount = msg.Amount - digged })))
+            inbox.Post (DiggerMessage.DiggerDigMessage (({ msg with Depth = msg.Depth + 1; Amount = msg.Amount - digged }))) //TODO: try dig deeper instead of posting a message
     }
 
     let rec messageLoop (license: License) (optimalDepth: int option): Async<unit> = async {
@@ -82,10 +82,19 @@ let digger (client: Client) (treasureResender: MailboxProcessor<TreasureRetryMes
             if license.Id.IsSome && license.DigAllowed > license.DigUsed then
                 let! priorityMessage = async {
                     if optimalDepth.IsSome then 
-                        return! inbox.TryScan((fun msg ->
+                        let! firstPriority = inbox.TryScan((fun msg ->
                             match msg with
-                            | DiggerMessage.DiggerDigMessage digMsg when digMsg.Depth <= optimalDepth.Value -> (Some (async { return msg }))
+                            | DiggerMessage.DiggerDigMessage digMsg when digMsg.Depth = optimalDepth.Value -> (Some (async { return msg }))
                             | _ -> None), 0)
+
+                        return! async {
+                            match firstPriority with
+                            | Some msg -> return Some msg
+                            | None -> return! inbox.TryScan((fun msg ->
+                                match msg with
+                                | DiggerMessage.DiggerDigMessage digMsg when digMsg.Depth <= optimalDepth.Value -> (Some (async { return msg }))
+                                | _ -> None), 0)
+                        }
                     else return None
                 }
 
@@ -98,7 +107,7 @@ let digger (client: Client) (treasureResender: MailboxProcessor<TreasureRetryMes
                 match msg with
                 | DiggerDigMessage digMsg ->
                     if digMsg.Amount > 0 && digMsg.Depth <= 10 then
-                        doDig license.Id.Value digMsg |> Async.Start
+                        doDig license.Id.Value digMsg optimalDepth |> Async.Start
                         return { license with DigUsed = license.DigUsed + 1 }, optimalDepth
                     else
                         return license, optimalDepth
