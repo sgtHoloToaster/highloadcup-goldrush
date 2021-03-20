@@ -129,7 +129,6 @@ let explorer (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<Digger
         exploreArea { oneBlockArea with PosX = coordinates.PosX; PosY = coordinates.PosY }
 
     let rec exploreAndDigAreaByBlocks (area: Area) (amount: int) (currentCoordinates: Coordinates): Async<int> = async {
-        Console.WriteLine("explore and dig by blocks: " + currentCoordinates.ToString())
         let! result = exploreOneBlock currentCoordinates
         let left = 
             match result with
@@ -231,13 +230,13 @@ let inline infiniteEnumerator elements =
         | true -> enumerator.Current
         | false -> raise (InvalidOperationException("Infinite enumerator is not infinite"))
 
-let inline createAgentsPool<'Msg> (body: MailboxProcessor<'Msg> -> Async<unit>) agentsCount = 
-    let agents = 
-        [| 1 .. agentsCount|] 
-        |> Seq.map (fun _ -> MailboxProcessor.Start body)
-        |> Seq.toArray
+let inline createAgents (body: MailboxProcessor<'Msg> -> Async<unit>) agentsCount =
+    [| 1 .. agentsCount|] 
+    |> Seq.map (fun _ -> MailboxProcessor.Start body)
+    |> Seq.toArray
 
-    infiniteEnumerator agents
+let inline createAgentsPool<'Msg> (body: MailboxProcessor<'Msg> -> Async<unit>) agentsCount = 
+    createAgents body agentsCount |> infiniteEnumerator
 
 let inline generateRange (startNumber: int) (increasePattern: int seq) (endNumber: int) = 
     let enumerator = infiniteEnumerator increasePattern
@@ -280,7 +279,8 @@ let diggingDepthOptimizer (inbox: MailboxProcessor<DiggingDepthOptimizerMessage>
         
     messageLoop Seq.empty Map.empty
 
-let inline exploreField (explorerAgentsPool: (unit -> MailboxProcessor<ExplorerMessage>)) (timeout: int) (startCoordinates: Coordinates) (endCoordinates: Coordinates) (stepX: int) (stepY: int) = async {
+let inline exploreField (explorerAgents: MailboxProcessor<ExplorerMessage> seq) (timeout: int) (startCoordinates: Coordinates) (endCoordinates: Coordinates) (stepX: int) (stepY: int) = async {
+    let explorerAgentsPool = explorerAgents |> infiniteEnumerator
     let maxPosX = endCoordinates.PosX - stepX
     let maxPosY = endCoordinates.PosY - stepY
     for x in startCoordinates.PosX .. stepX .. maxPosX do
@@ -297,10 +297,13 @@ let inline game (client: Client) = async {
     let diggingDepthOptimizerAgent = MailboxProcessor.Start (diggingDepthOptimizer)
     let diggerAgentsPool = createAgentsPool (digger client treasureResenderAgent diggingDepthOptimizerAgent) diggersCount
     Console.WriteLine("diggers: " + diggersCount.ToString())
+    Console.WriteLine("min threads: " + System.Threading.ThreadPool.GetMinThreads().ToString())
+    Console.WriteLine("max threads: " + System.Threading.ThreadPool.GetMaxThreads().ToString())
 
-    let digAreaSize = { SizeX = 2; SizeY = 2 }
-    let explorerAgentsPool = createAgentsPool (explorer client diggerAgentsPool digAreaSize) explorersCount
-    do! exploreField explorerAgentsPool 10 { PosX = 0; PosY = 0 } { PosX = 3500; PosY = 3500 } 4 4
+    let digAreaSize = { SizeX = 5; SizeY = 1 }
+    let explorerAgents = createAgents (explorer client diggerAgentsPool digAreaSize) explorersCount
+    exploreField explorerAgents 100 { PosX = 1501; PosY = 0 } { PosX = 3500; PosY = 3500 } 10 2 |> Async.Start
+    do! exploreField explorerAgents 10 { PosX = 0; PosY = 0 } { PosX = 1500; PosY = 3500 } 5 1
     do! Async.Sleep(Int32.MaxValue)
 }
 
