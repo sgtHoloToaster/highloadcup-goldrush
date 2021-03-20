@@ -262,19 +262,19 @@ let diggingDepthOptimizer (inbox: MailboxProcessor<DiggingDepthOptimizerMessage>
             for digger in diggers do
                 digger.Post (DiggerMessage.DiggerOptimalDepthMessage optimalDepth.Value)
             return ()
+        else
+            let! msg = inbox.Receive()
+            let newDiggers, newTreasuresCost = 
+                match msg with 
+                | DiggingDepthOptimizerMessage.TreasureReport treasuresMsg ->
+                    let newTreasuresCost = 
+                        if treasuresCost.ContainsKey treasuresMsg.Depth then treasuresCost
+                        else treasuresCost.Add(treasuresMsg.Depth, treasuresMsg.Coins)
+                    diggers, newTreasuresCost
+                | DiggingDepthOptimizerMessage.DiggerRegistration digger ->
+                     diggers |> Seq.append [digger], treasuresCost
 
-        let! msg = inbox.Receive()
-        let newDiggers, newTreasuresCost = 
-            match msg with 
-            | DiggingDepthOptimizerMessage.TreasureReport treasuresMsg ->
-                let newTreasuresCost = 
-                    if treasuresCost.ContainsKey treasuresMsg.Depth then treasuresCost
-                    else treasuresCost.Add(treasuresMsg.Depth, treasuresMsg.Coins)
-                diggers, newTreasuresCost
-            | DiggingDepthOptimizerMessage.DiggerRegistration digger ->
-                 diggers |> Seq.append [digger], treasuresCost
-
-        return! messageLoop newDiggers newTreasuresCost
+            return! messageLoop newDiggers newTreasuresCost
     }
         
     messageLoop Seq.empty Map.empty
@@ -291,14 +291,12 @@ let inline exploreField (explorerAgents: MailboxProcessor<ExplorerMessage> seq) 
     }
 
 let inline game (client: Client) = async {
-    let diggersCount = 8
-    let explorersCount = 1000
+    let diggersCount = 10
+    let explorersCount = 10000
     let treasureResenderAgent = MailboxProcessor.Start (treasureResender client)
     let diggingDepthOptimizerAgent = MailboxProcessor.Start (diggingDepthOptimizer)
     let diggerAgentsPool = createAgentsPool (digger client treasureResenderAgent diggingDepthOptimizerAgent) diggersCount
     Console.WriteLine("diggers: " + diggersCount.ToString())
-    Console.WriteLine("min threads: " + System.Threading.ThreadPool.GetMinThreads().ToString())
-    Console.WriteLine("max threads: " + System.Threading.ThreadPool.GetMaxThreads().ToString())
 
     let digAreaSize = { SizeX = 5; SizeY = 1 }
     let explorerAgents = createAgents (explorer client diggerAgentsPool digAreaSize) explorersCount
