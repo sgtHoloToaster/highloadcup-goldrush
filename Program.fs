@@ -27,7 +27,6 @@ type ExplorerMessage = {
     PosY: int
     SizeX: int
     SizeY: int
-    Amount: Option<int>
     Retry: int
 }
 
@@ -129,10 +128,8 @@ let explorer (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<Digger
     let rec exploreOneBlock (coordinates: Coordinates) = 
         exploreArea { oneBlockArea with PosX = coordinates.PosX; PosY = coordinates.PosY }
 
-    let rec exploreAndDigArea (area: Area) (amount: int) (currentCoordinates: Coordinates) = async {
-        if amount = 0 then 
-            return ()
-
+    let rec exploreAndDigAreaByBlocks (area: Area) (amount: int) (currentCoordinates: Coordinates): Async<int> = async {
+        Console.WriteLine("explore and dig by blocks: " + currentCoordinates.ToString())
         let! result = exploreOneBlock currentCoordinates
         let left = 
             match result with
@@ -141,70 +138,66 @@ let explorer (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<Digger
                 amount - exploreResult.Amount
             | _ -> amount
             
-        if left > 0 then
+        if left = 0 then
+            return amount
+        else
             let maxPosX = area.PosX + area.SizeX
             let maxPosY = area.PosY + area.SizeY
             let newCoordinates = 
                 match currentCoordinates.PosX, currentCoordinates.PosY with
-                | x, y when x = maxPosX && y = maxPosY -> 
-                    Console.WriteLine("Treasures were not found after exploring the entire area")
-                    { PosX = area.PosX; PosY = area.PosY }
-                | x, y when x = maxPosX -> { PosX = area.PosX; PosY = y + 1 }
-                | x, y -> { PosX = x + 1; PosY = y }
+                | x, y when x = maxPosX && y = maxPosY -> None
+                | x, y when x = maxPosX -> Some { PosX = area.PosX; PosY = y + 1 }
+                | x, y -> Some { PosX = x + 1; PosY = y }
 
-            return! exploreAndDigArea area left newCoordinates
+            match newCoordinates with
+            | None -> return amount - left
+            | Some newCoordinates -> 
+                return 1 + (exploreAndDigAreaByBlocks area left newCoordinates |> Async.RunSynchronously)
+    }
+
+    let rec exploreAndDigArea (area: Area): Async<int> = async {
+        let! result = exploreArea area
+        match result with
+        | Ok exploreResult -> 
+            match exploreResult.Amount, area.SizeX, area.SizeY with
+            | 0, _, _ -> return 0
+            | amount, x, _ when x > digAreaSize.SizeX ->
+                let firstArea = { 
+                    area with SizeX = (Math.Floor((area.SizeX |> double) / 2.0) |> int) 
+                }
+                let secondArea = { 
+                    area with SizeX = (Math.Ceiling((area.SizeX |> double) / 2.0) |> int) 
+                              PosX = firstArea.PosX + firstArea.SizeX
+                }
+                let! firstResult = exploreAndDigArea firstArea
+                let! secondResult = async {
+                    if firstResult = amount then return 0
+                    else return! exploreAndDigArea secondArea
+                }
+                return firstResult + secondResult
+            | amount, _, y when y > digAreaSize.SizeY ->
+                let firstArea = { 
+                    area with SizeY = (Math.Floor((area.SizeY |> double) / 2.0) |> int) 
+                }
+                let secondArea = { 
+                    area with SizeY = (Math.Ceiling((area.SizeY |> double) / 2.0) |> int) 
+                              PosY = firstArea.PosY + firstArea.SizeY
+                }
+                let! firstResult = exploreAndDigArea firstArea
+                let! secondResult = async {
+                    if firstResult = amount then return 0
+                    else return! exploreAndDigArea secondArea
+                }
+                return firstResult + secondResult
+            | amount, _, _ ->
+                return! exploreAndDigAreaByBlocks area amount { PosX = area.PosX; PosY = area.PosY }
+        | Error _ -> return! exploreAndDigArea area
     }
         
-    let inline exploreMessageArea (msg: ExplorerMessage) = async {
-        let! exploreResult = exploreArea { PosX = msg.PosX; PosY = msg.PosY; SizeX = msg.SizeX; SizeY = msg.SizeY }
-        match exploreResult with
-        | Ok result when result.Amount > 0 -> inbox.Post { msg with Amount = Some result.Amount }
-        | Error _ when msg.Retry < 3 -> inbox.Post { msg with Retry = msg.Retry + 1 }
-        | _ -> ()
-    }
-
-    let inline processMessage (msg: ExplorerMessage) = async {
-        match msg.SizeX, msg.SizeY, msg.Amount with 
-        | _, _, Some 0 -> ()
-        | sizeX, sizeY, Some _ when sizeX > digAreaSize.SizeX || sizeY > digAreaSize.SizeY ->
-            let maxPosX = msg.PosX + sizeX;
-            let maxPosY = msg.PosY + sizeY;
-            let stepX = digAreaSize.SizeX
-            let stepY = digAreaSize.SizeY
-            let maxIterX = maxPosX - stepX
-            let maxIterY = maxPosY - stepY
-            for x in msg.PosX .. stepX .. maxIterX do
-                for y in msg.PosY .. stepY .. maxIterY do
-                    let newMsg = { 
-                        PosX = x
-                        PosY = y 
-                        SizeX = Math.Min(stepX, maxPosX - x)
-                        SizeY = Math.Min(stepY, maxPosY - y) 
-                        Amount = None
-                        Retry = 0
-                    }
-                    inbox.Post newMsg
-        | _, _, Some amount ->
-            exploreAndDigArea { PosX = msg.PosX; PosY = msg.PosY; SizeX = msg.SizeX; SizeY = msg.SizeY } amount { PosX = msg.PosX; PosY = msg.PosY } |> Async.Start
-        | _, _, None ->
-            exploreMessageArea msg |> Async.Start
-    }
-
     let rec messageLoop() = async {
-        let! priorityMessage = inbox.TryScan((fun msg ->
-            match msg.Amount with
-            | Some _ -> (Some (async { return msg }))
-            | None -> None), 0)
-
-        let! msg = async {
-            match priorityMessage with
-            | Some prMsg -> return prMsg
-            | _ -> return! inbox.Receive()
-        }
-
-        //Console.WriteLine("received: " + msg.ToString())
-        do! processMessage msg
-            
+        let! msg = inbox.Receive()
+        let area = { PosX = msg.PosX; PosY = msg.PosY; SizeX = msg.SizeX; SizeY = msg.SizeY }
+        do! exploreAndDigArea area |> Async.Ignore
         return! messageLoop()
     }
 
@@ -264,9 +257,7 @@ let inline generateRange (startNumber: int) (increasePattern: int seq) (endNumbe
 let diggingDepthOptimizer (inbox: MailboxProcessor<DiggingDepthOptimizerMessage>) =
     let rec messageLoop (diggers: MailboxProcessor<DiggerMessage> seq) (treasuresCost: Map<int, int>) = async {
         if treasuresCost.Count = 10 then
-            Console.WriteLine(treasuresCost |> Seq.sortBy (fun kv -> kv.Key) 
-                                            |> Seq.map (fun kv -> kv.Value.ToString())
-                                            |> (fun f -> String.concat "," (f |> Seq.toArray)))
+            Console.WriteLine("diggers: " + (diggers |> Seq.length).ToString() + " time: " + DateTime.UtcNow.ToString())
             let optimalDepth = treasuresCost |> Seq.sortBy (fun kv -> kv.Key) 
                                              |> Seq.last
             for digger in diggers do
@@ -294,7 +285,7 @@ let inline exploreField (explorerAgentsPool: (unit -> MailboxProcessor<ExplorerM
     let maxPosY = endCoordinates.PosY - stepY
     for x in startCoordinates.PosX .. stepX .. maxPosX do
         for y in startCoordinates.PosY .. stepY .. maxPosY do
-            let msg = { PosX = x; PosY = y; SizeX = stepX; SizeY = stepY; Amount = None; Retry = 0 }
+            let msg = { PosX = x; PosY = y; SizeX = stepX; SizeY = stepY; Retry = 0 }
             explorerAgentsPool().Post msg
             do! Async.Sleep(timeout)
     }
@@ -307,9 +298,9 @@ let inline game (client: Client) = async {
     let diggerAgentsPool = createAgentsPool (digger client treasureResenderAgent diggingDepthOptimizerAgent) diggersCount
     Console.WriteLine("diggers: " + diggersCount.ToString())
 
-    let digAreaSize = { SizeX = 5; SizeY = 1 }
+    let digAreaSize = { SizeX = 2; SizeY = 2 }
     let explorerAgentsPool = createAgentsPool (explorer client diggerAgentsPool digAreaSize) explorersCount
-    do! exploreField explorerAgentsPool 10 { PosX = 0; PosY = 0 } { PosX = 3500; PosY = 3500 } 5 1
+    do! exploreField explorerAgentsPool 10 { PosX = 0; PosY = 0 } { PosX = 3500; PosY = 3500 } 4 4
     do! Async.Sleep(Int32.MaxValue)
 }
 
