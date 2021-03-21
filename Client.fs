@@ -34,6 +34,7 @@ type Client(baseUrl: string) =
     let digUrl = baseUrl + "dig"
     let cashUrl = baseUrl + "cash"
     let exploreUrl = baseUrl + "explore"
+    let balanceUrl = baseUrl + "balance"
     member private this.Post<'T, 'T1> (client: HttpClient) (url: string) (body: 'T1) = 
         async {
             let bodyJson = JsonSerializer.Serialize(body)
@@ -90,3 +91,6 @@ type Client(baseUrl: string) =
                    | Ok res -> Ok { Amount = res.Amount; Area = res.Area; Priority = 0 }
                    | Error err -> Error err
         }
+
+    member this.GetBalance() =
+        this.Get<Wallet> nonPersistentClient balanceUrl
