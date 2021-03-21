@@ -78,7 +78,7 @@ let digger (client: Client)
                 })
             |> Async.Parallel
             |> Async.Ignore
-            |> Async.Start
+            |> Async.RunSynchronously
             let digged = treasures.Treasures |> Seq.length
             if digged < msg.Amount then
                 inbox.Post (DiggerDigMessage (({ msg with Depth = msg.Depth + 1; Amount = msg.Amount - digged }))) 
