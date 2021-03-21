@@ -156,7 +156,7 @@ let digger (client: Client)
     diggingDepthOptimizer.Post (DiggingDepthOptimizerMessage.DiggerRegistration inbox)
     messageLoop { Id = None; DigAllowed = 0; DigUsed = 0 } None Seq.empty
 
-let explorer (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<DiggerMessage>) (digAreaSize: AreaSize) (inbox: MailboxProcessor<ExplorerMessage>) =
+let explore (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<DiggerMessage>) (digAreaSize: AreaSize) (area: Area) =
     let rec exploreArea (area: Area) = async {
         let! exploreResult = client.PostExplore(area)
         match exploreResult with 
@@ -231,16 +231,8 @@ let explorer (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<Digger
                 return! exploreAndDigAreaByBlocks area amount { PosX = area.PosX; PosY = area.PosY }
         | Error _ -> return! exploreAndDigArea area
     }
-        
-    let rec messageLoop() = async {
-        let! msg = inbox.Receive()
-        let area = { PosX = msg.PosX; PosY = msg.PosY; SizeX = msg.SizeX; SizeY = msg.SizeY }
-        exploreAndDigArea area |> Async.Ignore |> Async.Start
-        //if exploredAmount > 0 then do! Async.Sleep(1)
-        return! messageLoop()
-    }
-
-    messageLoop()
+    
+    exploreAndDigArea area
 
 let treasureResender (client: Client) (inbox: MailboxProcessor<TreasureRetryMessage>) =
     let rec messageLoop() = async {
@@ -385,20 +377,18 @@ let diggingDepthOptimizer (inbox: MailboxProcessor<DiggingDepthOptimizerMessage>
         
     messageLoop Seq.empty Map.empty
 
-let inline exploreField (explorerAgents: MailboxProcessor<ExplorerMessage> seq) (timeout: int) (startCoordinates: Coordinates) (endCoordinates: Coordinates) (stepX: int) (stepY: int) = async {
-    let explorerAgentsPool = explorerAgents |> infiniteEnumerator
+let inline exploreField (explorer: Area -> Async<int>) (timeout: int) (startCoordinates: Coordinates) (endCoordinates: Coordinates) (stepX: int) (stepY: int) = async {
     let maxPosX = endCoordinates.PosX - stepX
     let maxPosY = endCoordinates.PosY - stepY
     for x in startCoordinates.PosX .. stepX .. maxPosX do
         for y in startCoordinates.PosY .. stepY .. maxPosY do
-            let msg = { PosX = x; PosY = y; SizeX = stepX; SizeY = stepY; Retry = 0 }
-            explorerAgentsPool().Post msg
+            let area = { PosX = x; PosY = y; SizeX = stepX; SizeY = stepY }
+            explorer area |> Async.Ignore |> Async.Start
             do! Async.Sleep(timeout)
     }
 
 let inline game (client: Client) = async {
     let diggersCount = 10
-    let explorersCount = 10000
     let treasureResenderAgent = MailboxProcessor.Start (treasureResender client)
     let diggingDepthOptimizerAgent = MailboxProcessor.Start (diggingDepthOptimizer)
     let diggingLicenseCostOptimizerAgent = MailboxProcessor.Start (diggingLicensesCostOptimizer client 0.7 50)
@@ -406,10 +396,10 @@ let inline game (client: Client) = async {
     Console.WriteLine("diggers: " + diggersCount.ToString())
 
     let digAreaSize = { SizeX = 5; SizeY = 1 }
-    let explorerAgents = createAgents (explorer client diggerAgentsPool digAreaSize) explorersCount
+    let explorer = explore client diggerAgentsPool digAreaSize
     seq {
-        exploreField explorerAgents 100 { PosX = 1501; PosY = 0 } { PosX = 3500; PosY = 3500 } 10 2
-        exploreField explorerAgents 10 { PosX = 0; PosY = 0 } { PosX = 1500; PosY = 3500 } 5 1
+        exploreField explorer 100 { PosX = 1501; PosY = 0 } { PosX = 3500; PosY = 3500 } 10 2
+        exploreField explorer 10 { PosX = 0; PosY = 0 } { PosX = 1500; PosY = 3500 } 5 1
     } |> Async.Parallel |> Async.Ignore |> Async.RunSynchronously
     do! Async.Sleep(Int32.MaxValue)
 }
