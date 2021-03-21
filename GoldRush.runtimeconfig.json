@@ -1,5 +1,10 @@
 {
   "runtimeOptions": {
+    "tfm": "net5.0",
+    "framework": {
+      "name": "Microsoft.NETCore.App",
+      "version": "5.0.0"
+    },
     "configProperties": {
       "System.GC.HeapHardLimitPercent": 95,
       "System.GC.Concurrent": true,
