@@ -81,7 +81,7 @@ let digger (client: Client)
                     })
                 |> Async.Parallel
                 |> Async.RunSynchronously
-                |> Seq.reduce (fun f s -> Seq.append f s)
+                |> Seq.concat
             let digged = treasures.Treasures |> Seq.length
             diggingLicenseCostOptimizer.Post (AddCoins coins)
             inbox.Post (DiggerDigMessage (({ msg with Depth = msg.Depth + 1; Amount = msg.Amount - digged }))) //TODO: try dig deeper instead of posting a message
@@ -91,37 +91,29 @@ let digger (client: Client)
         let! (newLicense, optimalDepth, newCoins) = async {
             if license.Id.IsSome && license.DigAllowed > license.DigUsed then
                 let! msg = async {
-                    let! coinsMsg = inbox.TryScan((fun msg ->
-                        match msg with
-                        | AddCoinsToBuyLicense _ -> (Some (async { return msg }))
-                        | _ -> None), 0)
+                    let! priorityMessage = async {
+                        if optimalDepth.IsSome then 
+                            let! firstPriority = inbox.TryScan((fun msg ->
+                                match msg with
+                                | DiggerDigMessage digMsg when digMsg.Depth = optimalDepth.Value -> (Some (async { return msg }))
+                                | _ -> None), 0)
 
-                    match coinsMsg with
-                    | Some msg -> return msg
-                    | _ ->
-                        let! priorityMessage = async {
-                            if optimalDepth.IsSome then 
-                                let! firstPriority = inbox.TryScan((fun msg ->
+                            return! async {
+                                match firstPriority with
+                                | Some msg -> return Some msg
+                                | None -> return! inbox.TryScan((fun msg ->
                                     match msg with
-                                    | DiggerDigMessage digMsg when digMsg.Depth = optimalDepth.Value -> (Some (async { return msg }))
+                                    | DiggerDigMessage digMsg when digMsg.Depth <= optimalDepth.Value -> (Some (async { return msg }))
                                     | _ -> None), 0)
+                            }
+                        else return None
+                    }
 
-                                return! async {
-                                    match firstPriority with
-                                    | Some msg -> return Some msg
-                                    | None -> return! inbox.TryScan((fun msg ->
-                                        match msg with
-                                        | DiggerDigMessage digMsg when digMsg.Depth <= optimalDepth.Value -> (Some (async { return msg }))
-                                        | _ -> None), 0)
-                                }
-                            else return None
-                        }
-
-                        return! async {
-                            match priorityMessage with
-                            | Some priorityMessage -> return priorityMessage
-                            | _ -> return! inbox.Receive()
-                        }
+                    return! async {
+                        match priorityMessage with
+                        | Some priorityMessage -> return priorityMessage
+                        | _ -> return! inbox.Receive()
+                    }
                 }
 
                 match msg with
@@ -133,12 +125,26 @@ let digger (client: Client)
                         return license, optimalDepth, coins
                 | DiggerOptimalDepthMessage optimalDepth ->
                     return license, (Some optimalDepth), coins
-                | AddCoinsToBuyLicense coins ->
-                    return license, optimalDepth, coins
+                | AddCoinsToBuyLicense newCoins ->
+                    Console.WriteLine("coins are received: " + (Seq.length newCoins).ToString())
+                    return license, optimalDepth, newCoins
             else
                 diggingLicenseCostOptimizer.Post (GetCoins inbox)
-                let coinsCount = coins |> Seq.length
-                let! licenseUpdateResult = client.PostLicense coins
+                let! coinsToBuyLicense = async {
+                    if not (Seq.isEmpty coins) then return coins
+                    else 
+                        let! coinsMsg = inbox.TryScan((fun msg -> 
+                            match msg with
+                            | AddCoinsToBuyLicense _ -> Some (async { return msg })
+                            | _ -> None), 0)
+                        return 
+                            match coinsMsg with
+                            | Some (AddCoinsToBuyLicense newCoins) -> newCoins
+                            | _ -> Seq.empty
+                }
+
+                let coinsCount = coinsToBuyLicense |> Seq.length
+                let! licenseUpdateResult = client.PostLicense coinsToBuyLicense
                 return match licenseUpdateResult with 
                        | Ok newLicense -> 
                             if coinsCount > 0 then
@@ -333,10 +339,10 @@ let diggingLicensesCostOptimizer (spendLimit: float) (maxExploreCost: int) (inbo
     }
 
     let rec messageLoop (state: LicensesCostOptimizerState) = async {
-        let! priorityMessage = inbox.TryScan(fun msg -> 
+        let! priorityMessage = inbox.TryScan((fun msg -> 
             match msg with
             | GetCoins _ -> Some (async { return msg })
-            | _ -> None)
+            | _ -> None), 10)
 
         let! msg = async {
             match priorityMessage with
@@ -345,10 +351,6 @@ let diggingLicensesCostOptimizer (spendLimit: float) (maxExploreCost: int) (inbo
         }
 
         let! newState = processMessage state msg
-        match msg with
-        | GetCoins _ -> ()
-        | _ -> do! Async.Sleep(100)
-
         return! messageLoop newState
     }
          
