@@ -133,7 +133,7 @@ let digger (client: Client)
                     return { state with Coins = newCoins; OptimalLicenseCost = optimalLicenseCost }
             else
                 let! (optimalLicenseCost, coins) = async {
-                    if Seq.length state.Coins >= state.OptimalLicenseCost then return state.OptimalLicenseCost, state.Coins
+                    if not(Seq.isEmpty state.Coins) then return state.OptimalLicenseCost, state.Coins
                     else 
                         let! result = inbox.TryScan((fun msg -> 
                             match msg with
@@ -145,9 +145,10 @@ let digger (client: Client)
                             | _ -> state.OptimalLicenseCost, Seq.empty
                 }
 
-                let coinsToBuyLicense = coins |> Seq.take optimalLicenseCost
+                let coinsToBuyLicense = coins |> Seq.truncate optimalLicenseCost
                 let coinsToBuyLicenseCount = coinsToBuyLicense |> Seq.length
                 let! licenseUpdateResult = client.PostLicense coinsToBuyLicense
+                let coinsLeft = coins |> Seq.skip coinsToBuyLicenseCount
                 return match licenseUpdateResult with 
                        | Ok newLicense -> 
                             if coinsToBuyLicenseCount > 0 then
@@ -155,11 +156,10 @@ let digger (client: Client)
                                 Console.WriteLine("license is bought: " + newLicense.ToString())
                                 diggingLicenseCostOptimizer.Post (LicenseIsBought(coinsToBuyLicenseCount, newLicense))
                             
-                            let coinsLeft = coins |> Seq.skip coinsToBuyLicenseCount
-                            if coinsLeft |> Seq.length < optimalLicenseCost || optimalLicenseCost = 0 then
+                            if coinsLeft |> Seq.isEmpty then
                                 diggingLicenseCostOptimizer.Post (GetCoins inbox)
                             { state with License = newLicense; OptimalLicenseCost = optimalLicenseCost; Coins = coinsLeft }
-                       | Error _ -> { state with OptimalLicenseCost = optimalLicenseCost; Coins = coins |> Seq.skip coinsToBuyLicenseCount }
+                       | Error _ -> { state with OptimalLicenseCost = optimalLicenseCost; Coins = coinsLeft }
         }
 
         return! messageLoop newState
@@ -327,7 +327,7 @@ let diggingLicensesCostOptimizer (client: Client) (spendLimit: float) (maxExplor
         if coinsCount >= licenseCost then
             return 
                 if state.OptimalCost.IsNone then
-                    digger.Post (AddCoinsToBuyLicense (licenseCost, (balance.Wallet |> Seq.take licenseCost)))
+                    digger.Post (AddCoinsToBuyLicense (licenseCost, (balance.Wallet |> Seq.truncate licenseCost)))
                     { newState with ExploreCost = state.ExploreCost + 1; Spend = state.Spend + state.ExploreCost; Wallet = balance.Wallet |> Seq.skip licenseCost }
                 else if state.Spend < int32((float balance.Balance * spendLimit)) then
                     digger.Post (AddCoinsToBuyLicense (state.OptimalCost.Value, balance.Wallet))
