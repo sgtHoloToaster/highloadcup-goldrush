@@ -39,7 +39,10 @@ type DiggerDigMessage = {
 
 type DiggerMessage = DiggerDigMessage of DiggerDigMessage | DiggerOptimalDepthMessage of int | AddCoinsToBuyLicense of int seq
 type DiggingDepthOptimizerMessage = TreasureReport of TreasureReportMessage | DiggerRegistration of MailboxProcessor<DiggerMessage>
-type DiggingLicenseCostOptimizerMessage = AddCoins of int seq | LicenseIsBought of int * License | DiggerRegistration of MailboxProcessor<DiggerMessage>
+type DiggingLicenseCostOptimizerMessage = 
+    AddCoins of int seq 
+    | GetCoins of MailboxProcessor<DiggerMessage>
+    | LicenseIsBought of int * License 
 
 type TreasureRetryMessage = {
     Treasure: string
@@ -123,6 +126,7 @@ let digger (client: Client)
                 | AddCoinsToBuyLicense coins ->
                     return license, optimalDepth, coins
             else
+                diggingLicenseCostOptimizer.Post (GetCoins inbox)
                 let coinsCount = coins |> Seq.length
                 let! licenseUpdateResult = client.PostLicense coins
                 return match licenseUpdateResult with 
@@ -137,7 +141,6 @@ let digger (client: Client)
     }
 
     diggingDepthOptimizer.Post (DiggingDepthOptimizerMessage.DiggerRegistration inbox)
-    diggingLicenseCostOptimizer.Post (DiggingLicenseCostOptimizerMessage.DiggerRegistration inbox)
     messageLoop { Id = None; DigAllowed = 0; DigUsed = 0 } None Seq.empty
 
 let explorer (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<DiggerMessage>) (digAreaSize: AreaSize) (inbox: MailboxProcessor<ExplorerMessage>) =
@@ -277,34 +280,30 @@ let inline generateRange (startNumber: int) (increasePattern: int seq) (endNumbe
     increase startNumber
 
 type LicensesCostOptimizerState = {
-    Diggers: MailboxProcessor<DiggerMessage> array
     Coins: int seq
     LicensesCost: Map<int, int>
     ExploreCost: int
     TotalCoins: int
-    DiggerToBuyLicense: int
     OptimalCost: int option
 }
 
 let diggingLicensesCostOptimizer (spendLimit: float) (maxExploreCost: int) (inbox: MailboxProcessor<DiggingLicenseCostOptimizerMessage>) =
-    let rec messageLoop (state: LicensesCostOptimizerState) = async {
-        let! msg = inbox.Receive()
-        let newState = 
+    let processMessage state msg = async {
+        return 
             match msg with
             | AddCoins incomeCoins -> 
                 let newCoins = incomeCoins |> Seq.append state.Coins
-                let newCoinsCount = newCoins |> Seq.length
                 let newTotalCoins = state.TotalCoins + (incomeCoins |> Seq.length)
-                let nextDiggerIndex = (state.DiggerToBuyLicense + 1) % (state.Diggers |> Array.length)
-                let digger = Array.get state.Diggers state.DiggerToBuyLicense
-                if state.OptimalCost.IsNone && newCoinsCount > state.ExploreCost then
-                    digger.Post (AddCoinsToBuyLicense (newCoins |> Seq.take state.ExploreCost))
-                    { state with ExploreCost = state.ExploreCost + 1; Coins = newCoins |> Seq.skip state.ExploreCost; 
-                                 TotalCoins = newTotalCoins; DiggerToBuyLicense = nextDiggerIndex }
-                else if state.OptimalCost.IsSome && float newCoinsCount > ((float state.TotalCoins) * (1.0 - spendLimit)) then
-                    digger.Post (AddCoinsToBuyLicense (newCoins |> Seq.take state.OptimalCost.Value))
-                    { state with Coins = newCoins |> Seq.skip state.OptimalCost.Value; TotalCoins = newTotalCoins; DiggerToBuyLicense = nextDiggerIndex }
-                else { state with Coins = newCoins; TotalCoins = newTotalCoins }
+                { state with Coins = newCoins; TotalCoins = newTotalCoins }
+            | GetCoins digger ->
+                let coinsCount = state.Coins |> Seq.length
+                if state.OptimalCost.IsNone && coinsCount > state.ExploreCost then
+                    digger.Post (AddCoinsToBuyLicense (state.Coins |> Seq.take state.ExploreCost))
+                    { state with ExploreCost = state.ExploreCost + 1; Coins = state.Coins |> Seq.skip state.ExploreCost }
+                else if state.OptimalCost.IsSome && float coinsCount > ((float state.TotalCoins) * (1.0 - spendLimit)) then
+                    digger.Post (AddCoinsToBuyLicense (state.Coins |> Seq.take state.OptimalCost.Value))
+                    { state with Coins = state.Coins |> Seq.skip state.OptimalCost.Value }
+                else state
             | LicenseIsBought (licenseCost, license) -> 
                 if state.OptimalCost.IsSome then state
                 else
@@ -314,20 +313,20 @@ let diggingLicensesCostOptimizer (spendLimit: float) (maxExploreCost: int) (inbo
                         let (optimalCost, _) = 
                             newState.LicensesCost 
                             |> Map.toSeq 
-                            |> Seq.map (fun (cost, digAllowed) -> cost, (float cost / float digAllowed))
+                            |> Seq.map (fun (cost, digAllowed) -> cost, (float cost / (float digAllowed - 3.0)))
                             |> Seq.sortBy (fun (cost, costPerDig) -> costPerDig, cost)
                             |> Seq.find (fun _ -> true)
-                        Console.WriteLine("license costs are: " + newState.LicensesCost.ToString())
-                        Console.WriteLine("optimal license cost is: " + optimalCost.ToString())
                         { newState with OptimalCost = Some optimalCost }
                     else newState
-            | DiggerRegistration newDigger -> { state with Diggers = state.Diggers |> Array.append ([|newDigger|]) }
-            
+    }
+
+    let rec messageLoop (state: LicensesCostOptimizerState) = async {
+        let! msg = inbox.Receive()
+        let! newState = processMessage state msg
         return! messageLoop newState
     }
          
-    messageLoop { Diggers = Array.empty; Coins = Seq.empty; LicensesCost = Map.empty; ExploreCost = 1; TotalCoins = 0; 
-                  DiggerToBuyLicense = 0; OptimalCost = None }
+    messageLoop { Coins = Seq.empty; LicensesCost = Map.empty; ExploreCost = 1; TotalCoins = 0; OptimalCost = None }
 
 let diggingDepthOptimizer (inbox: MailboxProcessor<DiggingDepthOptimizerMessage>) =
     let rec messageLoop (diggers: MailboxProcessor<DiggerMessage> seq) (treasuresCost: Map<int, int>) = async {
@@ -370,7 +369,7 @@ let inline game (client: Client) = async {
     let explorersCount = 10000
     let treasureResenderAgent = MailboxProcessor.Start (treasureResender client)
     let diggingDepthOptimizerAgent = MailboxProcessor.Start (diggingDepthOptimizer)
-    let diggingLicenseCostOptimizerAgent = MailboxProcessor.Start (diggingLicensesCostOptimizer 0.7 100)
+    let diggingLicenseCostOptimizerAgent = MailboxProcessor.Start (diggingLicensesCostOptimizer 0.7 50)
     let diggerAgentsPool = createAgentsPool (digger client treasureResenderAgent diggingDepthOptimizerAgent diggingLicenseCostOptimizerAgent) diggersCount
     Console.WriteLine("diggers: " + diggersCount.ToString())
 
