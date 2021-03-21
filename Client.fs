@@ -51,7 +51,7 @@ type Client(baseUrl: string) =
         async {
             try
                 let! response = client.GetAsync(url) |> Async.AwaitTask
-                return! processResponse response
+                return! processResponse<'T> response
             with
             | :? AggregateException as aggex -> 
                 match aggex.InnerException with

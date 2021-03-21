@@ -37,9 +37,7 @@ type DiggerDigMessage = {
     Amount: int
 }
 
-type DiggerMessage = DiggerDigMessage of DiggerDigMessage | DiggerOptimalDepthMessage of int
-
-
+type DiggerMessage = DiggerDigMessage of DiggerDigMessage | DiggerOptimalDepthMessage of int | AddCoins of int seq
 type DiggingDepthOptimizerMessage = TreasureReport of TreasureReportMessage | DiggerRegistration of MailboxProcessor<DiggerMessage>
 
 type TreasureRetryMessage = {
@@ -48,8 +46,8 @@ type TreasureRetryMessage = {
 }
 
 let digger (client: Client) (treasureResender: MailboxProcessor<TreasureRetryMessage>) (diggingDepthOptimizer: MailboxProcessor<DiggingDepthOptimizerMessage>) (inbox: MailboxProcessor<DiggerMessage>) = 
-    let inline doDig licenseId msg (optimalDepth: int option) = async {
-        let dig = { LicenseID = licenseId; PosX = msg.PosX; PosY = msg.PosY; Depth = msg.Depth }
+    let inline doDig license msg = async {
+        let dig = { LicenseID = license.Id.Value; PosX = msg.PosX; PosY = msg.PosY; Depth = msg.Depth }
         let! treasuresResult = client.PostDig dig
         match treasuresResult with 
         | Error ex -> 
@@ -58,33 +56,37 @@ let digger (client: Client) (treasureResender: MailboxProcessor<TreasureRetryMes
                 match ex.StatusCode.Value with 
                 | HttpStatusCode.NotFound -> inbox.Post (DiggerMessage.DiggerDigMessage ({ msg with Depth = msg.Depth + 1 }))
                 | HttpStatusCode.UnprocessableEntity -> ()
-                | _ -> inbox.Post (DiggerMessage.DiggerDigMessage (msg)) // retry
-            | _ -> inbox.Post (DiggerMessage.DiggerDigMessage (msg)) // retry
+                | HttpStatusCode.Forbidden -> Console.WriteLine("Forbidden for: " + license.ToString())
+                | _ -> inbox.Post (DiggerDigMessage (msg)) // retry
+            | _ -> inbox.Post (DiggerDigMessage (msg)) // retry
         | Ok treasures -> 
-            let digged = 
+            let coins = 
                 treasures.Treasures 
                 |> Seq.map (
                     fun treasure -> async {
                         let! result = client.PostCash treasure
                         return match result with 
-                               | Ok coins -> diggingDepthOptimizer.Post (DiggingDepthOptimizerMessage.TreasureReport { Depth = msg.Depth; Coins = coins |> Seq.length }); 1
-                               | _ -> treasureResender.Post { Treasure = treasure; Retry = 0 }; 1
+                               | Ok coins -> 
+                                    diggingDepthOptimizer.Post (TreasureReport { Depth = msg.Depth; Coins = coins |> Seq.length })
+                                    coins
+                               | _ -> treasureResender.Post { Treasure = treasure; Retry = 0 }; Seq.empty
                     })
                 |> Async.Parallel
                 |> Async.RunSynchronously
-                |> Seq.sum
-
-            inbox.Post (DiggerMessage.DiggerDigMessage (({ msg with Depth = msg.Depth + 1; Amount = msg.Amount - digged }))) //TODO: try dig deeper instead of posting a message
+                |> Seq.reduce (fun f s -> Seq.append f s)
+            let digged = treasures.Treasures |> Seq.length
+            inbox.Post (AddCoins coins)
+            inbox.Post (DiggerDigMessage (({ msg with Depth = msg.Depth + 1; Amount = msg.Amount - digged }))) //TODO: try dig deeper instead of posting a message
     }
 
-    let rec messageLoop (license: License) (optimalDepth: int option): Async<unit> = async {
-        let! (newLicense, optimalDepth) = async {
+    let rec messageLoop (license: License) (optimalDepth: int option) (coins: int seq): Async<unit> = async {
+        let! (newLicense, optimalDepth, newCoins) = async {
             if license.Id.IsSome && license.DigAllowed > license.DigUsed then
                 let! priorityMessage = async {
                     if optimalDepth.IsSome then 
                         let! firstPriority = inbox.TryScan((fun msg ->
                             match msg with
-                            | DiggerMessage.DiggerDigMessage digMsg when digMsg.Depth = optimalDepth.Value -> (Some (async { return msg }))
+                            | DiggerDigMessage digMsg when digMsg.Depth = optimalDepth.Value -> (Some (async { return msg }))
                             | _ -> None), 0)
 
                         return! async {
@@ -92,7 +94,7 @@ let digger (client: Client) (treasureResender: MailboxProcessor<TreasureRetryMes
                             | Some msg -> return Some msg
                             | None -> return! inbox.TryScan((fun msg ->
                                 match msg with
-                                | DiggerMessage.DiggerDigMessage digMsg when digMsg.Depth <= optimalDepth.Value -> (Some (async { return msg }))
+                                | DiggerDigMessage digMsg when digMsg.Depth <= optimalDepth.Value -> (Some (async { return msg }))
                                 | _ -> None), 0)
                         }
                     else return None
@@ -107,24 +109,31 @@ let digger (client: Client) (treasureResender: MailboxProcessor<TreasureRetryMes
                 match msg with
                 | DiggerDigMessage digMsg ->
                     if digMsg.Amount > 0 && digMsg.Depth <= 10 then
-                        doDig license.Id.Value digMsg optimalDepth |> Async.Start
-                        return { license with DigUsed = license.DigUsed + 1 }, optimalDepth
+                        doDig license digMsg |> Async.Start
+                        return { license with DigUsed = license.DigUsed + 1 }, optimalDepth, coins
                     else
-                        return license, optimalDepth
+                        return license, optimalDepth, coins
                 | DiggerOptimalDepthMessage optimalDepth ->
-                    return license, (Some optimalDepth)
-            else 
-                let! licenseUpdateResult = client.PostLicense Seq.empty<int>
+                    return license, (Some optimalDepth), coins
+                | AddCoins coins ->
+                    return license, optimalDepth, coins
+            else
+                let coinsForLicenseCount = (coins |> Seq.length) / 2;
+                let coinsForLicense = coins |> Seq.take coinsForLicenseCount
+                let! licenseUpdateResult = client.PostLicense coinsForLicense
                 return match licenseUpdateResult with 
-                       | Ok newLicense -> newLicense, optimalDepth
-                       | Error ex -> license, optimalDepth
+                       | Ok newLicense -> 
+                            if coinsForLicenseCount > 0 then
+                                Console.WriteLine("for coins: " + coinsForLicenseCount.ToString() + " license: " + newLicense.ToString())
+                            newLicense, optimalDepth, (coins |> Seq.skip coinsForLicenseCount)
+                       | Error ex -> license, optimalDepth, (coins |> Seq.skip coinsForLicenseCount)
         }
 
-        return! messageLoop newLicense optimalDepth
+        return! messageLoop newLicense optimalDepth newCoins
     }
 
     diggingDepthOptimizer.Post (DiggingDepthOptimizerMessage.DiggerRegistration inbox)
-    messageLoop { Id = None; DigAllowed = 0; DigUsed = 0 } None
+    messageLoop { Id = None; DigAllowed = 0; DigUsed = 0 } None Seq.empty
 
 let explorer (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<DiggerMessage>) (digAreaSize: AreaSize) (inbox: MailboxProcessor<ExplorerMessage>) =
     let rec exploreArea (area: Area) = async {
@@ -265,7 +274,7 @@ let inline generateRange (startNumber: int) (increasePattern: int seq) (endNumbe
 let diggingDepthOptimizer (inbox: MailboxProcessor<DiggingDepthOptimizerMessage>) =
     let rec messageLoop (diggers: MailboxProcessor<DiggerMessage> seq) (treasuresCost: Map<int, int>) = async {
         if treasuresCost.Count = 10 then
-            Console.WriteLine("diggers: " + (diggers |> Seq.length).ToString() + " time: " + DateTime.UtcNow.ToString())
+            //Console.WriteLine("diggers: " + (diggers |> Seq.length).ToString() + " time: " + DateTime.UtcNow.ToString())
             let optimalDepth = treasuresCost |> Seq.sortBy (fun kv -> kv.Key) 
                                              |> Seq.last
             for digger in diggers do
