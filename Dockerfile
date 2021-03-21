@@ -12,4 +12,8 @@ FROM mcr.microsoft.com/dotnet/runtime:5.0-buster-slim
 WORKDIR /app
 COPY --from=build /app .
 
+ENV COMPlus_gcServer=1
+ENV COMPlus_gcConcurrent=1
+ENV COMPlus_GCHeapHardLimitPercent=5A
+
 ENTRYPOINT ["./GoldRush"]
