@@ -122,20 +122,19 @@ let digger (client: Client)
                 | DiggerOptimalDepthMessage optimalDepth ->
                     return license, (Some optimalDepth), coins
                 | AddCoinsToBuyLicense newCoins ->
-                    Console.WriteLine("coins are received: " + (Seq.length newCoins).ToString())
                     return license, optimalDepth, newCoins
             else
                 diggingLicenseCostOptimizer.Post (GetCoins inbox)
                 let! coinsToBuyLicense = async {
                     if not (Seq.isEmpty coins) then return coins
                     else 
-                        let! coinsMsg = inbox.TryScan((fun msg -> 
+                        let! coins = inbox.TryScan((fun msg -> 
                             match msg with
-                            | AddCoinsToBuyLicense _ -> Some (async { return msg })
+                            | AddCoinsToBuyLicense coins -> Some (async { return coins })
                             | _ -> None), 0)
                         return 
-                            match coinsMsg with
-                            | Some (AddCoinsToBuyLicense newCoins) -> newCoins
+                            match coins with
+                            | Some newCoins -> newCoins
                             | _ -> Seq.empty
                 }
 
@@ -144,6 +143,7 @@ let digger (client: Client)
                 return match licenseUpdateResult with 
                        | Ok newLicense -> 
                             if coinsCount > 0 then
+                                Console.WriteLine("for coins: " + coinsCount.ToString() + " " + DateTime.Now.ToString())
                                 Console.WriteLine("license is bought: " + newLicense.ToString())
                                 diggingLicenseCostOptimizer.Post (LicenseIsBought(coinsCount, newLicense))
                             newLicense, optimalDepth, Seq.empty
@@ -323,11 +323,11 @@ let diggingLicensesCostOptimizer (client: Client) (spendLimit: float) (maxExplor
         if coinsCount >= coinsNeeded then
             return 
                 if state.OptimalCost.IsNone then
-                    digger.Post (AddCoinsToBuyLicense (balance.Wallet |> Seq.take state.ExploreCost))
-                    { newState with ExploreCost = state.ExploreCost + 1; Spend = state.Spend + state.ExploreCost }
+                    digger.Post (AddCoinsToBuyLicense (balance.Wallet |> Seq.take coinsNeeded))
+                    { newState with ExploreCost = state.ExploreCost + 1; Spend = state.Spend + state.ExploreCost; Wallet = balance.Wallet |> Seq.skip coinsNeeded }
                 else if state.Spend > int32((float balance.Balance * (1.0 - spendLimit))) then
-                    digger.Post (AddCoinsToBuyLicense (balance.Wallet |> Seq.take state.OptimalCost.Value))
-                    { newState with Spend = state.Spend + state.OptimalCost.Value }
+                    digger.Post (AddCoinsToBuyLicense (balance.Wallet |> Seq.take coinsNeeded))
+                    { newState with Spend = state.Spend + state.OptimalCost.Value;  Wallet = balance.Wallet |> Seq.skip coinsNeeded }
                 else newState
         else return newState
     }    
