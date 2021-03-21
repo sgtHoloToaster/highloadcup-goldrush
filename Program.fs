@@ -317,7 +317,7 @@ let diggingLicensesCostOptimizer (client: Client) (spendLimit: float) (maxExplor
                 if state.OptimalCost.IsNone then
                     digger.Post (AddCoinsToBuyLicense (balance.Wallet |> Seq.take coinsNeeded))
                     { newState with ExploreCost = state.ExploreCost + 1; Spend = state.Spend + state.ExploreCost; Wallet = balance.Wallet |> Seq.skip coinsNeeded }
-                else if state.Spend > int32((float balance.Balance * (1.0 - spendLimit))) then
+                else if state.Spend < int32((float balance.Balance * (1.0 - spendLimit))) then
                     digger.Post (AddCoinsToBuyLicense (balance.Wallet |> Seq.take coinsNeeded))
                     { newState with Spend = state.Spend + state.OptimalCost.Value;  Wallet = balance.Wallet |> Seq.skip coinsNeeded }
                 else newState
