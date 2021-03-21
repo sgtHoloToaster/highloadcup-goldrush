@@ -17,8 +17,7 @@ jsonSerializerOptions.Converters.Add(JsonFSharpConverter())
 
 let inline deserializeResponseBody<'T> (response: HttpResponseMessage) =
     async {
-        let! content = response.Content.ReadAsStringAsync() |> Async.AwaitTask
-        return JsonSerializer.Deserialize<'T>(content, jsonSerializerOptions)
+        return! JsonSerializer.DeserializeAsync<'T>(response.Content.ReadAsStream(), jsonSerializerOptions).AsTask() |> Async.AwaitTask
     }
 
 let inline processResponse<'T> (response: HttpResponseMessage) =
@@ -29,7 +28,7 @@ let inline processResponse<'T> (response: HttpResponseMessage) =
 
 type Client(baseUrl: string) =
     let persistentClient = new HttpClient(Timeout = TimeSpan.FromSeconds(300.0))
-    let nonPersistentClient = new HttpClient(Timeout = TimeSpan.FromSeconds(30.0))
+    let nonPersistentClient = new HttpClient(Timeout = TimeSpan.FromSeconds(120.0))
     let licensesUrl = baseUrl + "licenses"
     let digUrl = baseUrl + "dig"
     let cashUrl = baseUrl + "cash"
