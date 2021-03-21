@@ -5,15 +5,13 @@ open System.Text.Json
 open System.Text
 open Models
 open System
-open System.Text.Json.Serialization
 
 type ExploreResult = {
-    Area: Area
-    Amount: int
+    area: Area
+    amount: int
 }
 
-let jsonSerializerOptions: JsonSerializerOptions = new JsonSerializerOptions( PropertyNameCaseInsensitive = true )
-jsonSerializerOptions.Converters.Add(JsonFSharpConverter())
+let jsonSerializerOptions: JsonSerializerOptions = new JsonSerializerOptions()
 
 let inline deserializeResponseBody<'T> (response: HttpResponseMessage) =
     async {
@@ -76,7 +74,7 @@ type Client(baseUrl: string) =
         async {
             let! response = this.Post<string seq, Dig> nonPersistentClient digUrl dig
             return match response with 
-                   | Ok treasures -> Ok { Priority = 0; Treasures = treasures }
+                   | Ok treasures -> Ok { priority = 0; treasures = treasures }
                    | Error err -> Error err
         }
 
@@ -85,10 +83,7 @@ type Client(baseUrl: string) =
 
     member this.PostExplore (area: Area) = 
         async {
-            let! exploreResult = this.Post<ExploreResult, Area> nonPersistentClient exploreUrl area
-            return match exploreResult with
-                   | Ok res -> Ok { Amount = res.Amount; Area = res.Area; Priority = 0 }
-                   | Error err -> Error err
+            return! this.Post<ExploreResult, Area> nonPersistentClient exploreUrl area
         }
 
     member this.GetBalance() =

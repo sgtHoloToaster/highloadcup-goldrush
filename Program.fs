@@ -59,7 +59,7 @@ let digger (client: Client)
         (diggingLicenseCostOptimizer: MailboxProcessor<DiggingLicenseCostOptimizerMessage>) 
         (inbox: MailboxProcessor<DiggerMessage>) = 
     let inline doDig license msg = async {
-        let dig = { LicenseID = license.Id; PosX = msg.PosX; PosY = msg.PosY; Depth = msg.Depth }
+        let dig = { licenseID = license.id; posX = msg.PosX; posY = msg.PosY; depth = msg.Depth }
         let! treasuresResult = client.PostDig dig
         match treasuresResult with 
         | Error ex -> 
@@ -74,7 +74,7 @@ let digger (client: Client)
                 | _ -> inbox.Post (DiggerDigMessage (msg)) // retry
             | _ -> inbox.Post (DiggerDigMessage (msg)) // retry
         | Ok treasures -> 
-            treasures.Treasures 
+            treasures.treasures 
             |> Seq.map (
                 fun treasure -> async {
                     let! result = client.PostCash treasure
@@ -86,14 +86,14 @@ let digger (client: Client)
             |> Async.Parallel
             |> Async.Ignore
             |> Async.RunSynchronously
-            let digged = treasures.Treasures |> Seq.length
+            let digged = treasures.treasures |> Seq.length
             if digged < msg.Amount then
                 inbox.Post (DiggerDigMessage (({ msg with Depth = msg.Depth + 1; Amount = msg.Amount - digged }))) 
     }
 
     let rec messageLoop (state: DiggerState): Async<unit> = async {
         let! newState = async {
-            if state.License.IsSome && state.License.Value.DigAllowed > state.License.Value.DigUsed then
+            if state.License.IsSome && state.License.Value.digAllowed > state.License.Value.digUsed then
                 let! msg = async {
                     let! priorityMessage = async {
                         if state.OptimalDepth.IsSome then 
@@ -124,7 +124,7 @@ let digger (client: Client)
                 | DiggerDigMessage digMsg ->
                     if digMsg.Amount > 0 && digMsg.Depth <= 10 then
                         doDig state.License.Value digMsg |> Async.Start
-                        return { state with License = Some { state.License.Value with DigUsed = state.License.Value.DigUsed + 1 } }
+                        return { state with License = Some { state.License.Value with digUsed = state.License.Value.digUsed + 1 } }
                     else
                         return state
                 | DiggerOptimalDepthMessage optimalDepth ->
@@ -177,26 +177,26 @@ let explore (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<DiggerM
     }
 
     let rec exploreOneBlock (coordinates: Coordinates) = 
-        exploreArea { oneBlockArea with PosX = coordinates.PosX; PosY = coordinates.PosY }
+        exploreArea { oneBlockArea with posX = coordinates.PosX; posY = coordinates.PosY }
 
     let rec exploreAndDigAreaByBlocks (area: Area) (amount: int) (currentCoordinates: Coordinates): Async<int> = async {
         let! result = exploreOneBlock currentCoordinates
         let left = 
             match result with
-            | Ok exploreResult when exploreResult.Amount > 0 -> 
-                diggerAgentsPool().Post (DiggerMessage.DiggerDigMessage ({ PosX = exploreResult.Area.PosX; PosY = exploreResult.Area.PosY; Amount = exploreResult.Amount; Depth = 1 }))
-                amount - exploreResult.Amount
+            | Ok exploreResult when exploreResult.amount > 0 -> 
+                diggerAgentsPool().Post (DiggerMessage.DiggerDigMessage ({ PosX = exploreResult.area.posX; PosY = exploreResult.area.posY; Amount = exploreResult.amount; Depth = 1 }))
+                amount - exploreResult.amount
             | _ -> amount
             
         if left = 0 then
             return amount
         else
-            let maxPosX = area.PosX + area.SizeX
-            let maxPosY = area.PosY + area.SizeY
+            let maxPosX = area.posX + area.sizeX
+            let maxPosY = area.posY + area.sizeY
             let newCoordinates = 
                 match currentCoordinates.PosX, currentCoordinates.PosY with
                 | x, y when x = maxPosX && y = maxPosY -> None
-                | x, y when x = maxPosX -> Some { PosX = area.PosX; PosY = y + 1 }
+                | x, y when x = maxPosX -> Some { PosX = area.posX; PosY = y + 1 }
                 | x, y -> Some { PosX = x + 1; PosY = y }
 
             match newCoordinates with
@@ -209,15 +209,15 @@ let explore (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<DiggerM
         let! result = exploreArea area
         match result with
         | Ok exploreResult -> 
-            match exploreResult.Amount, area.SizeX, area.SizeY with
+            match exploreResult.amount, area.sizeX, area.sizeY with
             | 0, _, _ -> return 0
             | amount, x, _ when x > digAreaSize.SizeX ->
                 let firstArea = { 
-                    area with SizeX = (Math.Floor((area.SizeX |> double) / 2.0) |> int) 
+                    area with sizeX = (Math.Floor((area.sizeX |> double) / 2.0) |> int) 
                 }
                 let secondArea = { 
-                    area with SizeX = (Math.Ceiling((area.SizeX |> double) / 2.0) |> int) 
-                              PosX = firstArea.PosX + firstArea.SizeX
+                    area with sizeX = (Math.Ceiling((area.sizeX |> double) / 2.0) |> int) 
+                              posX = firstArea.posX + firstArea.sizeX
                 }
                 let! firstResult = exploreAndDigArea firstArea
                 let! secondResult = async {
@@ -227,11 +227,11 @@ let explore (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<DiggerM
                 return firstResult + secondResult
             | amount, _, y when y > digAreaSize.SizeY ->
                 let firstArea = { 
-                    area with SizeY = (Math.Floor((area.SizeY |> double) / 2.0) |> int) 
+                    area with sizeY = (Math.Floor((area.sizeY |> double) / 2.0) |> int) 
                 }
                 let secondArea = { 
-                    area with SizeY = (Math.Ceiling((area.SizeY |> double) / 2.0) |> int) 
-                              PosY = firstArea.PosY + firstArea.SizeY
+                    area with sizeY = (Math.Ceiling((area.sizeY |> double) / 2.0) |> int) 
+                              posY = firstArea.posY + firstArea.sizeY
                 }
                 let! firstResult = exploreAndDigArea firstArea
                 let! secondResult = async {
@@ -240,7 +240,7 @@ let explore (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<DiggerM
                 }
                 return firstResult + secondResult
             | amount, _, _ ->
-                return! exploreAndDigAreaByBlocks area amount { PosX = area.PosX; PosY = area.PosY }
+                return! exploreAndDigAreaByBlocks area amount { PosX = area.posX; PosY = area.posY }
         | Error _ -> return! exploreAndDigArea area
     }
     
@@ -315,22 +315,22 @@ let diggingLicensesCostOptimizer (client: Client) (spendLimit: float) (maxExplor
     }
     
     let getBalance state coinsNeeded = async {
-        if state.Wallet |> Seq.length >= coinsNeeded then return { Wallet = state.Wallet; Balance = state.Balance }
+        if state.Wallet |> Seq.length >= coinsNeeded then return { wallet = state.Wallet; balance = state.Balance }
         else return! getBalanceFromServer()
     }
     
     let rec sendCoins state (digger: MailboxProcessor<DiggerMessage>) = async {
         let licenseCost = if state.OptimalCost.IsSome then state.OptimalCost.Value else state.ExploreCost
         let! balance = getBalance state licenseCost
-        let coinsCount = balance.Wallet |> Seq.length
-        let newState = { state with Wallet = balance.Wallet; Balance = balance.Balance }
+        let coinsCount = balance.wallet |> Seq.length
+        let newState = { state with Wallet = balance.wallet; Balance = balance.balance }
         if coinsCount >= licenseCost then
             return 
                 if state.OptimalCost.IsNone then
-                    digger.Post (AddCoinsToBuyLicense (licenseCost, (balance.Wallet |> Seq.truncate licenseCost)))
-                    { newState with ExploreCost = state.ExploreCost + 1; Spend = state.Spend + state.ExploreCost; Wallet = balance.Wallet |> Seq.skip licenseCost }
-                else if state.Spend < int32((float balance.Balance * spendLimit)) then
-                    digger.Post (AddCoinsToBuyLicense (state.OptimalCost.Value, balance.Wallet))
+                    digger.Post (AddCoinsToBuyLicense (licenseCost, (balance.wallet |> Seq.truncate licenseCost)))
+                    { newState with ExploreCost = state.ExploreCost + 1; Spend = state.Spend + state.ExploreCost; Wallet = balance.wallet |> Seq.skip licenseCost }
+                else if state.Spend < int32((float balance.balance * spendLimit)) then
+                    digger.Post (AddCoinsToBuyLicense (state.OptimalCost.Value, balance.wallet))
                     { newState with Spend = state.Spend + state.OptimalCost.Value; Wallet = Seq.empty }
                 else newState
         else return newState
@@ -344,7 +344,7 @@ let diggingLicensesCostOptimizer (client: Client) (spendLimit: float) (maxExplor
                 if state.OptimalCost.IsSome then state
                 else
                     let newState = if state.LicensesCost.ContainsKey licenseCost then state
-                                    else { state with LicensesCost = (state.LicensesCost.Add (licenseCost, license.DigAllowed)) }
+                                    else { state with LicensesCost = (state.LicensesCost.Add (licenseCost, license.digAllowed)) }
                     if newState.LicensesCost |> Map.count >= maxExploreCost then
                         let (optimalCost, _) = 
                             newState.LicensesCost 
@@ -395,7 +395,7 @@ let inline exploreField (explorer: Area -> Async<int>) (timeout: int) (startCoor
     let maxPosY = endCoordinates.PosY - stepY
     for x in startCoordinates.PosX .. stepX .. maxPosX do
         for y in startCoordinates.PosY .. stepY .. maxPosY do
-            let area = { PosX = x; PosY = y; SizeX = stepX; SizeY = stepY }
+            let area = { posX = x; posY = y; sizeX = stepX; sizeY = stepY }
             explorer area |> Async.Ignore |> Async.Start
             do! Async.Sleep(timeout)
     }
