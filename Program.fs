@@ -59,28 +59,29 @@ let digger (client: Client)
             match ex with 
             | :? HttpRequestException as ex when ex.StatusCode.HasValue ->
                 match ex.StatusCode.Value with 
-                | HttpStatusCode.NotFound -> inbox.Post (DiggerMessage.DiggerDigMessage ({ msg with Depth = msg.Depth + 1 }))
+                | HttpStatusCode.NotFound -> 
+                    if msg.Depth < 10 then
+                        inbox.Post (DiggerMessage.DiggerDigMessage ({ msg with Depth = msg.Depth + 1 }))
                 | HttpStatusCode.UnprocessableEntity -> ()
                 | HttpStatusCode.Forbidden -> Console.WriteLine("Forbidden for: " + license.ToString())
                 | _ -> inbox.Post (DiggerDigMessage (msg)) // retry
             | _ -> inbox.Post (DiggerDigMessage (msg)) // retry
         | Ok treasures -> 
-            let coins = 
-                treasures.Treasures 
-                |> Seq.map (
-                    fun treasure -> async {
-                        let! result = client.PostCash treasure
-                        return match result with 
-                               | Ok coins -> 
-                                    diggingDepthOptimizer.Post (TreasureReport { Depth = msg.Depth; Coins = coins |> Seq.length })
-                                    coins
-                               | _ -> treasureResender.Post { Treasure = treasure; Retry = 0 }; Seq.empty
-                    })
-                |> Async.Parallel
-                |> Async.RunSynchronously
-                |> Seq.concat
+            treasures.Treasures 
+            |> Seq.map (
+                fun treasure -> async {
+                    let! result = client.PostCash treasure
+                    return match result with 
+                            | Ok coins -> 
+                                diggingDepthOptimizer.Post (TreasureReport { Depth = msg.Depth; Coins = coins |> Seq.length })
+                            | _ -> treasureResender.Post { Treasure = treasure; Retry = 0 }
+                })
+            |> Async.Parallel
+            |> Async.Ignore
+            |> Async.Start
             let digged = treasures.Treasures |> Seq.length
-            inbox.Post (DiggerDigMessage (({ msg with Depth = msg.Depth + 1; Amount = msg.Amount - digged }))) //TODO: try dig deeper instead of posting a message
+            if digged < msg.Amount then
+                inbox.Post (DiggerDigMessage (({ msg with Depth = msg.Depth + 1; Amount = msg.Amount - digged }))) 
     }
 
     let rec messageLoop (license: License) (optimalDepth: int option) (coins: int seq): Async<unit> = async {
@@ -317,7 +318,7 @@ let diggingLicensesCostOptimizer (client: Client) (spendLimit: float) (maxExplor
                 if state.OptimalCost.IsNone then
                     digger.Post (AddCoinsToBuyLicense (balance.Wallet |> Seq.take coinsNeeded))
                     { newState with ExploreCost = state.ExploreCost + 1; Spend = state.Spend + state.ExploreCost; Wallet = balance.Wallet |> Seq.skip coinsNeeded }
-                else if state.Spend < int32((float balance.Balance * (1.0 - spendLimit))) then
+                else if state.Spend < int32((float balance.Balance * spendLimit)) then
                     digger.Post (AddCoinsToBuyLicense (balance.Wallet |> Seq.take coinsNeeded))
                     { newState with Spend = state.Spend + state.OptimalCost.Value;  Wallet = balance.Wallet |> Seq.skip coinsNeeded }
                 else newState
@@ -340,6 +341,7 @@ let diggingLicensesCostOptimizer (client: Client) (spendLimit: float) (maxExplor
                             |> Seq.map (fun (cost, digAllowed) -> cost, (float cost / (float digAllowed - 3.0)))
                             |> Seq.sortBy (fun (cost, costPerDig) -> costPerDig, cost)
                             |> Seq.find (fun _ -> true)
+                        Console.WriteLine("optimal cost is " + optimalCost.ToString() + " time: " + DateTime.Now.ToString())
                         { newState with OptimalCost = Some optimalCost }
                     else newState
     }
@@ -400,6 +402,8 @@ let inline game (client: Client) = async {
     seq {
         exploreField explorer 100 { PosX = 1501; PosY = 0 } { PosX = 3500; PosY = 3500 } 10 2
         exploreField explorer 10 { PosX = 0; PosY = 0 } { PosX = 1500; PosY = 3500 } 5 1
+        //exploreField explorer 30 { PosX = 501; PosY = 0 } { PosX = 1000; PosY = 3500 } 5 1
+        //exploreField explorer 30 { PosX = 1001; PosY = 0 } { PosX = 1500; PosY = 3500 } 5 1
     } |> Async.Parallel |> Async.Ignore |> Async.RunSynchronously
     do! Async.Sleep(Int32.MaxValue)
 }
