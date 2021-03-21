@@ -5,6 +5,8 @@ open Models
 open Client
 open System.Net.Http
 open System.Net
+open Akka.FSharp
+open Akka.Actor
 
 type AreaSize = {
     SizeX: int
@@ -51,7 +53,7 @@ type TreasureRetryMessage = {
 
 let digger (client: Client) 
         (treasureResender: MailboxProcessor<TreasureRetryMessage>) 
-        (diggingDepthOptimizer: MailboxProcessor<DiggingDepthOptimizerMessage>) 
+        (diggingDepthOptimizer: IActorRef) 
         (diggingLicenseCostOptimizer: MailboxProcessor<DiggingLicenseCostOptimizerMessage>) 
         (inbox: MailboxProcessor<DiggerMessage>) = 
     let inline doDig license msg = async {
@@ -75,7 +77,8 @@ let digger (client: Client)
                         let! result = client.PostCash treasure
                         return match result with 
                                | Ok coins -> 
-                                    diggingDepthOptimizer.Post (TreasureReport { Depth = msg.Depth; Coins = coins |> Seq.length })
+                                    let msg = TreasureReport { Depth = msg.Depth; Coins = coins |> Seq.length }
+                                    diggingDepthOptimizer <! msg
                                     coins
                                | _ -> treasureResender.Post { Treasure = treasure; Retry = 0 }; Seq.empty
                     })
@@ -151,10 +154,10 @@ let digger (client: Client)
         return! messageLoop newLicense optimalDepth newCoins
     }
 
-    diggingDepthOptimizer.Post (DiggingDepthOptimizerMessage.DiggerRegistration inbox)
+    diggingDepthOptimizer <! (DiggingDepthOptimizerMessage.DiggerRegistration inbox)
     messageLoop { Id = None; DigAllowed = 0; DigUsed = 0 } None Seq.empty
 
-let explorer (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<DiggerMessage>) (digAreaSize: AreaSize) (inbox: MailboxProcessor<ExplorerMessage>) =
+let explorer (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<DiggerMessage>) (digAreaSize: AreaSize) (inbox: Actor<ExplorerMessage>) =
     let rec exploreArea (area: Area) = async {
         let! exploreResult = client.PostExplore(area)
         match exploreResult with 
@@ -230,7 +233,7 @@ let explorer (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<Digger
         | Error _ -> return! exploreAndDigArea area
     }
         
-    let rec messageLoop() = async {
+    let rec messageLoop() = actor {
         let! msg = inbox.Receive()
         let area = { PosX = msg.PosX; PosY = msg.PosY; SizeX = msg.SizeX; SizeY = msg.SizeY }
         exploreAndDigArea area |> Async.Ignore |> Async.Start
@@ -354,8 +357,8 @@ let diggingLicensesCostOptimizer (spendLimit: float) (maxExploreCost: int) (inbo
          
     messageLoop { Coins = Seq.empty; LicensesCost = Map.empty; ExploreCost = 1; TotalCoins = 0; OptimalCost = None }
 
-let diggingDepthOptimizer (inbox: MailboxProcessor<DiggingDepthOptimizerMessage>) =
-    let rec messageLoop (diggers: MailboxProcessor<DiggerMessage> seq) (treasuresCost: Map<int, int>) = async {
+let diggingDepthOptimizer (inbox: Actor<DiggingDepthOptimizerMessage>) = 
+    let rec messageLoop (diggers: MailboxProcessor<DiggerMessage> seq) (treasuresCost: Map<int, int>) = actor {
         if treasuresCost.Count = 10 then
             let optimalDepth = treasuresCost |> Seq.sortBy (fun kv -> kv.Key) 
                                              |> Seq.last
@@ -376,31 +379,39 @@ let diggingDepthOptimizer (inbox: MailboxProcessor<DiggingDepthOptimizerMessage>
 
             return! messageLoop newDiggers newTreasuresCost
     }
-        
+
     messageLoop Seq.empty Map.empty
 
-let inline exploreField (explorerAgents: MailboxProcessor<ExplorerMessage> seq) (timeout: int) (startCoordinates: Coordinates) (endCoordinates: Coordinates) (stepX: int) (stepY: int) = async {
+let inline exploreField (explorerAgents: IActorRef seq) (timeout: int) (startCoordinates: Coordinates) (endCoordinates: Coordinates) (stepX: int) (stepY: int) = async {
     let explorerAgentsPool = explorerAgents |> infiniteEnumerator
     let maxPosX = endCoordinates.PosX - stepX
     let maxPosY = endCoordinates.PosY - stepY
     for x in startCoordinates.PosX .. stepX .. maxPosX do
         for y in startCoordinates.PosY .. stepY .. maxPosY do
             let msg = { PosX = x; PosY = y; SizeX = stepX; SizeY = stepY; Retry = 0 }
-            explorerAgentsPool().Post msg
+            explorerAgentsPool() <! msg
             do! Async.Sleep(timeout)
     }
+
+
+let inline createAkkaAgents (actorSystem: ActorSystem) (name: String) (body: Actor<'Msg> -> Cont<'Msg, 'a>) agentsCount =
+    [| 1 .. agentsCount|] 
+    |> Seq.map (fun i -> spawn actorSystem (name + i.ToString()) body)
+    |> Seq.toArray
 
 let inline game (client: Client) = async {
     let diggersCount = 10
     let explorersCount = 10000
     let treasureResenderAgent = MailboxProcessor.Start (treasureResender client)
-    let diggingDepthOptimizerAgent = MailboxProcessor.Start (diggingDepthOptimizer)
+    use additional = System.create "additional" (Configuration.defaultConfig())
+    use explorers = System.create "explorers" (Configuration.defaultConfig())
+    let diggingDepthOptimizerAgent = spawn additional "depth-optimizer" (diggingDepthOptimizer)
     let diggingLicenseCostOptimizerAgent = MailboxProcessor.Start (diggingLicensesCostOptimizer 0.7 50)
     let diggerAgentsPool = createAgentsPool (digger client treasureResenderAgent diggingDepthOptimizerAgent diggingLicenseCostOptimizerAgent) diggersCount
     Console.WriteLine("diggers: " + diggersCount.ToString())
 
     let digAreaSize = { SizeX = 5; SizeY = 1 }
-    let explorerAgents = createAgents (explorer client diggerAgentsPool digAreaSize) explorersCount
+    let explorerAgents = createAkkaAgents explorers "explorer-" (explorer client diggerAgentsPool digAreaSize) explorersCount
     seq {
         exploreField explorerAgents 100 { PosX = 1501; PosY = 0 } { PosX = 3500; PosY = 3500 } 10 2
         exploreField explorerAgents 10 { PosX = 0; PosY = 0 } { PosX = 1500; PosY = 3500 } 5 1
