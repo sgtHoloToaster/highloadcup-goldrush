@@ -47,7 +47,7 @@ type TreasureRetryMessage = {
 }
 
 type DiggerState = {
-    License: License
+    License: License option
     OptimalDepth: int option
     Coins: int seq
     OptimalLicenseCost: int
@@ -59,7 +59,7 @@ let digger (client: Client)
         (diggingLicenseCostOptimizer: MailboxProcessor<DiggingLicenseCostOptimizerMessage>) 
         (inbox: MailboxProcessor<DiggerMessage>) = 
     let inline doDig license msg = async {
-        let dig = { LicenseID = license.Id.Value; PosX = msg.PosX; PosY = msg.PosY; Depth = msg.Depth }
+        let dig = { LicenseID = license.Id; PosX = msg.PosX; PosY = msg.PosY; Depth = msg.Depth }
         let! treasuresResult = client.PostDig dig
         match treasuresResult with 
         | Error ex -> 
@@ -93,7 +93,7 @@ let digger (client: Client)
 
     let rec messageLoop (state: DiggerState): Async<unit> = async {
         let! newState = async {
-            if state.License.Id.IsSome && state.License.DigAllowed > state.License.DigUsed then
+            if state.License.IsSome && state.License.Value.DigAllowed > state.License.Value.DigUsed then
                 let! msg = async {
                     let! priorityMessage = async {
                         if state.OptimalDepth.IsSome then 
@@ -123,8 +123,8 @@ let digger (client: Client)
                 match msg with
                 | DiggerDigMessage digMsg ->
                     if digMsg.Amount > 0 && digMsg.Depth <= 10 then
-                        doDig state.License digMsg |> Async.Start
-                        return { state with License = { state.License with DigUsed = state.License.DigUsed + 1 } }
+                        doDig state.License.Value digMsg |> Async.Start
+                        return { state with License = Some { state.License.Value with DigUsed = state.License.Value.DigUsed + 1 } }
                     else
                         return state
                 | DiggerOptimalDepthMessage optimalDepth ->
@@ -158,7 +158,7 @@ let digger (client: Client)
                             
                             if coinsLeft |> Seq.isEmpty then
                                 diggingLicenseCostOptimizer.Post (GetCoins inbox)
-                            { state with License = newLicense; OptimalLicenseCost = optimalLicenseCost; Coins = coinsLeft }
+                            { state with License = Some newLicense; OptimalLicenseCost = optimalLicenseCost; Coins = coinsLeft }
                        | Error _ -> { state with OptimalLicenseCost = optimalLicenseCost; Coins = coinsLeft }
         }
 
@@ -166,7 +166,7 @@ let digger (client: Client)
     }
 
     diggingDepthOptimizer.Post (DiggingDepthOptimizerMessage.DiggerRegistration inbox)
-    messageLoop { License = { Id = None; DigAllowed = 0; DigUsed = 0 }; OptimalDepth = None; Coins = Seq.empty; OptimalLicenseCost = 0 }
+    messageLoop { License = None; OptimalDepth = None; Coins = Seq.empty; OptimalLicenseCost = 0 }
 
 let explore (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<DiggerMessage>) (digAreaSize: AreaSize) (area: Area) =
     let rec exploreArea (area: Area) = async {

@@ -1,7 +1,7 @@
 module Models
 
 type License = {
-    Id: Option<int>
+    Id: int
     DigAllowed: int
     DigUsed: int
 } 
