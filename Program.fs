@@ -318,7 +318,7 @@ let diggingLicensesCostOptimizer (client: Client) (maxExploreCost: int) (inbox: 
         | Error _ -> return! getBalanceFromServer()
     }
     
-    let getWallet state coinsNeeded = async {
+    let inline getWallet state coinsNeeded = async {
         if state.Wallet |> Seq.length >= coinsNeeded then return state.Wallet
         else return! async {
             let! balance = getBalanceFromServer()
@@ -326,7 +326,7 @@ let diggingLicensesCostOptimizer (client: Client) (maxExploreCost: int) (inbox: 
         }
     }
     
-    let rec sendCoins state (digger: MailboxProcessor<DiggerMessage>) = async {
+    let inline sendCoins state (digger: MailboxProcessor<DiggerMessage>) = async {
         let licenseCost = if state.OptimalCost.IsSome then state.OptimalCost.Value else state.ExploreCost
         let! wallet = getWallet state licenseCost
         let coinsCount = wallet |> Seq.length
@@ -341,7 +341,7 @@ let diggingLicensesCostOptimizer (client: Client) (maxExploreCost: int) (inbox: 
         else return { state with Wallet = wallet }
     }    
     
-    let processMessage state msg = async {
+    let inline processMessage state msg = async {
         match msg with
         | GetCoins digger -> return! sendCoins state digger
         | LicenseIsBought (licenseCost, license) -> 

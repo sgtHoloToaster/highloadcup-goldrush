@@ -5,11 +5,13 @@ open System.Text.Json
 open System.Text
 open System
 
+[<Struct>]
 type LicenseDto = {
     id: int
     digAllowed: int
 } 
 
+[<Struct>]
 type AreaDto = {
     posX: int
     posY: int
@@ -17,10 +19,12 @@ type AreaDto = {
     sizeY: int
 }
 
+[<Struct>]
 type ExploreResult = {
     amount: int
 }
 
+[<Struct>]
 type DigDto = {
     licenseID: int
     posX: int
@@ -28,14 +32,17 @@ type DigDto = {
     depth: int
 }
 
+[<Struct>]
 type ExploreDto = {
     amount: int
 }
 
+[<Struct>]
 type WalletDto = {
     wallet: int seq
 }
 
+[<Struct>]
 type TreasureDto = {
     treasures: string seq
 }
@@ -59,7 +66,7 @@ type Client(baseUrl: string) =
     let cashUrl = baseUrl + "cash"
     let exploreUrl = baseUrl + "explore"
     let balanceUrl = baseUrl + "balance"
-    member private this.Post<'T, 'T1> (client: HttpClient) (url: string) (body: 'T1) = 
+    member inline private this.Post<'T, 'T1> (client: HttpClient) (url: string) (body: 'T1) = 
         async {
             let bodyJson = JsonSerializer.Serialize(body)
             use content = new StringContent(bodyJson, Encoding.UTF8, "application/json")
@@ -76,7 +83,7 @@ type Client(baseUrl: string) =
                 return Error (ex :> Exception)
         }
 
-    member private this.Get<'T> (client: HttpClient) (url: string) =
+    member inline private this.Get<'T> (client: HttpClient) (url: string) =
         async {
             try
                 let! response = client.GetAsync(url) |> Async.AwaitTask
