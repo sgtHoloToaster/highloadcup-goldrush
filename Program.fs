@@ -397,7 +397,9 @@ let inline exploreField (explorer: Area -> Async<int>) (timeout: int) (startCoor
         for y in startCoordinates.PosY .. stepY .. maxPosY do
             let area = { posX = x; posY = y; sizeX = stepX; sizeY = stepY }
             explorer area |> Async.Ignore |> Async.Start
-            do! Async.Sleep(timeout + int (Math.Sqrt(float(x - startCoordinates.PosX))) / 100)
+            let timeout = timeout + int (Math.Pow(float(x - startCoordinates.PosX), 2.0)) / 10000
+            Console.WriteLine("timeout: " + timeout.ToString())
+            do! Async.Sleep(timeout)
     }
 
 let inline game (client: Client) = async {
@@ -412,7 +414,7 @@ let inline game (client: Client) = async {
     let explorer = explore client diggerAgentsPool digAreaSize
     seq {
         exploreField explorer 85 { PosX = 1501; PosY = 0 } { PosX = 3500; PosY = 3500 } 10 2
-        exploreField explorer 6 { PosX = 0; PosY = 0 } { PosX = 1500; PosY = 3500 } 5 1
+        exploreField explorer 5 { PosX = 0; PosY = 0 } { PosX = 1500; PosY = 3500 } 5 1
     } |> Async.Parallel |> Async.Ignore |> Async.RunSynchronously
     do! Async.Sleep(Int32.MaxValue)
 }
