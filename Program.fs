@@ -152,8 +152,7 @@ let digger (client: Client)
                 return match licenseUpdateResult with 
                        | Ok newLicense -> 
                             if coinsToBuyLicenseCount > 0 then
-                                Console.WriteLine("for coins: " + coinsToBuyLicenseCount.ToString() + " " + DateTime.Now.ToString())
-                                Console.WriteLine("license is bought: " + newLicense.ToString())
+                                Console.WriteLine("for coins: " + coinsToBuyLicenseCount.ToString() + " " + DateTime.Now.ToString() + "\n license is bought: " + newLicense.ToString())
                                 diggingLicenseCostOptimizer.Post (LicenseIsBought(coinsToBuyLicenseCount, newLicense))
                             
                             if coinsLeft |> Seq.isEmpty then
@@ -397,8 +396,8 @@ let inline exploreField (explorer: Area -> Async<int>) (timeout: int) (startCoor
         for y in startCoordinates.PosY .. stepY .. maxPosY do
             let area = { posX = x; posY = y; sizeX = stepX; sizeY = stepY }
             explorer area |> Async.Ignore |> Async.Start
-            let timeout = timeout + int (Math.Pow(float(x - startCoordinates.PosX), 2.0)) / 10000
-            Console.WriteLine("timeout: " + timeout.ToString())
+            let timeout = timeout + int (Math.Pow(float(x - startCoordinates.PosX), 2.0)) / 5000
+            //Console.WriteLine("timeout: " + timeout.ToString())
             do! Async.Sleep(timeout)
     }
 
