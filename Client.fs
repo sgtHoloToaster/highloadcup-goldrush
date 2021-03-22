@@ -1,9 +1,8 @@
 ﻿module Client
 
 open System.Net.Http
-open System.Text.Json
-open System.Text
 open System
+open System.Net.Http.Json
 
 [<Struct>]
 type LicenseDto = {
@@ -68,10 +67,8 @@ type Client(baseUrl: string) =
     let balanceUrl = baseUrl + "balance"
     member inline private this.Post<'T, 'T1> (client: HttpClient) (url: string) (body: 'T1) = 
         async {
-            let bodyJson = JsonSerializer.Serialize(body)
-            use content = new StringContent(bodyJson, Encoding.UTF8, "application/json")
             try
-                let! response = client.PostAsync(url, content) |> Async.AwaitTask
+                let! response = client.PostAsJsonAsync(url, body) |> Async.AwaitTask
                 response.EnsureSuccessStatusCode() |> ignore
                 return! processResponse<'T> response
             with
