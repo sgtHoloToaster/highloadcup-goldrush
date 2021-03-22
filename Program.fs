@@ -199,10 +199,11 @@ let inline explore (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<
                 if currentCoordinates.PosX = maxPosX then None
                 else Some { currentCoordinates with PosX = currentCoordinates.PosX + 1 }
 
+            let digged = amount - left
             match newCoordinates with
-            | None -> return amount - left
+            | None -> return digged
             | Some newCoordinates -> 
-                return 1 + (exploreAndDigAreaByBlocks area left newCoordinates |> Async.RunSynchronously)
+                return digged + (exploreAndDigAreaByBlocks area left newCoordinates |> Async.RunSynchronously)
     }
 
     let rec exploreAndDigArea (area: AreaDto): Async<int> = async {
