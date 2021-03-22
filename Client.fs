@@ -3,12 +3,41 @@
 open System.Net.Http
 open System.Text.Json
 open System.Text
-open Models
 open System
 
+type LicenseDto = {
+    id: int
+    digAllowed: int
+} 
+
+type AreaDto = {
+    posX: int
+    posY: int
+    sizeX: int
+    sizeY: int
+}
+
 type ExploreResult = {
-    area: Area
     amount: int
+}
+
+type DigDto = {
+    licenseID: int
+    posX: int
+    posY: int
+    depth: int
+}
+
+type ExploreDto = {
+    amount: int
+}
+
+type WalletDto = {
+    wallet: int seq
+}
+
+type TreasureDto = {
+    treasures: string seq
 }
 
 let inline deserializeResponseBody<'T> (response: HttpResponseMessage) =
@@ -63,26 +92,26 @@ type Client(baseUrl: string) =
         }
 
     member this.PostLicense (coins: int seq) =  
-        this.Post<License, int seq> persistentClient licensesUrl coins
+        this.Post<LicenseDto, int seq> persistentClient licensesUrl coins
 
     member this.GetLicenses() =
-        this.Get<License seq> nonPersistentClient licensesUrl
+        this.Get<LicenseDto seq> nonPersistentClient licensesUrl
 
-    member this.PostDig (dig: Dig) =
+    member this.PostDig (dig: DigDto) =
         async {
-            let! response = this.Post<string seq, Dig> nonPersistentClient digUrl dig
+            let! response = this.Post<string seq, DigDto> nonPersistentClient digUrl dig
             return match response with 
-                   | Ok treasures -> Ok { priority = 0; treasures = treasures }
+                   | Ok treasures -> Ok { treasures = treasures }
                    | Error err -> Error err
         }
 
     member this.PostCash (treasure: string) =
         this.Post<int seq, string> persistentClient cashUrl treasure
 
-    member this.PostExplore (area: Area) = 
+    member this.PostExplore (area: AreaDto) = 
         async {
-            return! this.Post<ExploreResult, Area> nonPersistentClient exploreUrl area
+            return! this.Post<ExploreResult, AreaDto> nonPersistentClient exploreUrl area
         }
 
     member this.GetBalance() =
-        this.Get<Wallet> nonPersistentClient balanceUrl
+        this.Get<WalletDto> nonPersistentClient balanceUrl

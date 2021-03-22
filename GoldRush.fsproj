@@ -10,7 +10,6 @@
     <Content Include="GoldRush.runtimeconfig.json">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
-    <Compile Include="Models.fs" />
     <Compile Include="Client.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
