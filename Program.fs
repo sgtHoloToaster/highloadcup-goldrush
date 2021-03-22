@@ -10,25 +10,19 @@ type AreaSize = {
     SizeY: int
 }
 
+[<Struct>]
 type Coordinates = {
     PosX: int
     PosY: int
 }
 
+[<Struct>]
 type TreasureReportMessage = {
     Depth: int
     Coins: int
 }
 
-
-type ExplorerMessage = {
-    PosX: int
-    PosY: int
-    SizeX: int
-    SizeY: int
-    Retry: int
-}
-
+[<Struct>]
 type DiggerDigMessage = {
     PosX: int
     PosY: int
@@ -36,6 +30,7 @@ type DiggerDigMessage = {
     Amount: int
 }
 
+[<Struct>]
 type License = {
     Id: int
     DigUsed: int
@@ -46,11 +41,13 @@ type DiggerMessage = DiggerDigMessage of DiggerDigMessage | DiggerOptimalDepthMe
 type DiggingDepthOptimizerMessage = TreasureReport of TreasureReportMessage | DiggerRegistration of MailboxProcessor<DiggerMessage>
 type DiggingLicenseCostOptimizerMessage = GetCoins of MailboxProcessor<DiggerMessage> | LicenseIsBought of int * LicenseDto
 
+[<Struct>]
 type TreasureRetryMessage = {
     Treasure: string
     Retry: int
 }
 
+[<Struct>]
 type DiggerState = {
     License: License option
     OptimalDepth: int option
@@ -174,7 +171,7 @@ let digger (client: Client)
     messageLoop { License = None; OptimalDepth = None; Coins = Seq.empty; OptimalLicenseCost = 1 }
 
 let oneBlockArea = { posX = 0; posY = 0; sizeX = 1; sizeY = 1 }
-let explore (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<DiggerMessage>) (digAreaSize: AreaSize) (area: AreaDto) =
+let inline explore (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<DiggerMessage>) (digAreaSize: AreaSize) (area: AreaDto) =
     let rec exploreArea (area: AreaDto) = async {
         let! exploreResult = client.PostExplore(area)
         match exploreResult with 
@@ -198,12 +195,9 @@ let explore (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<DiggerM
             return amount
         else
             let maxPosX = area.posX + area.sizeX
-            let maxPosY = area.posY + area.sizeY
             let newCoordinates = 
-                match currentCoordinates.PosX, currentCoordinates.PosY with
-                | x, y when x = maxPosX && y = maxPosY -> None
-                | x, y when x = maxPosX -> Some { PosX = area.posX; PosY = y + 1 }
-                | x, y -> Some { PosX = x + 1; PosY = y }
+                if currentCoordinates.PosX = maxPosX then None
+                else Some { currentCoordinates with PosX = currentCoordinates.PosX + 1 }
 
             match newCoordinates with
             | None -> return amount - left
@@ -273,6 +267,7 @@ let inline generateRange (startNumber: int) (increasePattern: int seq) (endNumbe
         
     increase startNumber
 
+[<Struct>]
 type LicensesCostOptimizerState = {
     LicensesCost: Map<int, int>
     ExploreCost: int
@@ -368,13 +363,17 @@ let diggingDepthOptimizer (inbox: MailboxProcessor<DiggingDepthOptimizerMessage>
 let inline exploreField (explorer: AreaDto -> Async<int>) (timeout: int) (startCoordinates: Coordinates) (endCoordinates: Coordinates) (stepX: int) (stepY: int) = async {
     let maxPosX = endCoordinates.PosX - stepX
     let maxPosY = endCoordinates.PosY - stepY
-    for x in startCoordinates.PosX .. stepX .. maxPosX do
-        for y in startCoordinates.PosY .. stepY .. maxPosY do
-            let area = { posX = x; posY = y; sizeX = stepX; sizeY = stepY }
-            explorer area |> Async.Ignore |> Async.Start
-            let timeout = timeout + int (Math.Pow(float(x - startCoordinates.PosX), 2.0)) / 5000
-            //Console.WriteLine("timeout: " + timeout.ToString())
-            do! Async.Sleep(timeout)
+    let areas = seq {
+        for x in startCoordinates.PosX .. stepX .. maxPosX do
+            for y in startCoordinates.PosY .. stepY .. maxPosY do
+                yield { posX = x; posY = y; sizeX = stepX; sizeY = stepY }
+    }
+
+    for area in areas do
+        explorer area |> Async.Ignore |> Async.Start
+        let timeout = timeout + int (Math.Pow(float(area.posX - startCoordinates.PosX), 2.0)) / 5000
+        //Console.WriteLine("timeout: " + timeout.ToString())
+        do! Async.Sleep(timeout)
     }
 
 let inline game (client: Client) = async {
