@@ -78,7 +78,7 @@ type Client(baseUrl: string) =
             | :? AggregateException as aggex -> 
                 match aggex.InnerException with
                 | :? HttpRequestException as ex -> return Error (ex :> Exception)
-                | _ -> return Error aggex.InnerException
+                | _ -> Console.WriteLine(url + " " + aggex.InnerException.Message); return Error aggex.InnerException
             | :? HttpRequestException as ex -> 
                 return Error (ex :> Exception)
         }

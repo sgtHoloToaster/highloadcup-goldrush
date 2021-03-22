@@ -215,38 +215,8 @@ let explore (client: Client) (diggerAgentsPool: unit -> MailboxProcessor<DiggerM
         let! result = exploreArea area
         match result with
         | Ok exploreResult -> 
-            match exploreResult.amount, area.sizeX, area.sizeY with
-            | 0, _, _ -> return 0
-            | amount, x, _ when x > digAreaSize.SizeX ->
-                let firstArea = { 
-                    area with sizeX = (Math.Floor((area.sizeX |> double) / 2.0) |> int) 
-                }
-                let secondArea = { 
-                    area with sizeX = (Math.Ceiling((area.sizeX |> double) / 2.0) |> int) 
-                              posX = firstArea.posX + firstArea.sizeX
-                }
-                let! firstResult = exploreAndDigArea firstArea
-                let! secondResult = async {
-                    if firstResult = amount then return 0
-                    else return! exploreAndDigArea secondArea
-                }
-                return firstResult + secondResult
-            | amount, _, y when y > digAreaSize.SizeY ->
-                let firstArea = { 
-                    area with sizeY = (Math.Floor((area.sizeY |> double) / 2.0) |> int) 
-                }
-                let secondArea = { 
-                    area with sizeY = (Math.Ceiling((area.sizeY |> double) / 2.0) |> int) 
-                              posY = firstArea.posY + firstArea.sizeY
-                }
-                let! firstResult = exploreAndDigArea firstArea
-                let! secondResult = async {
-                    if firstResult = amount then return 0
-                    else return! exploreAndDigArea secondArea
-                }
-                return firstResult + secondResult
-            | amount, _, _ ->
-                return! exploreAndDigAreaByBlocks area amount { PosX = area.posX; PosY = area.posY }
+            if exploreResult.amount = 0 then return 0
+            else return! exploreAndDigAreaByBlocks area exploreResult.amount { PosX = area.posX; PosY = area.posY }
         | Error _ -> return! exploreAndDigArea area
     }
     
@@ -418,7 +388,7 @@ let inline game (client: Client) = async {
     let digAreaSize = { SizeX = 5; SizeY = 1 }
     let explorer = explore client diggerAgentsPool digAreaSize
     seq {
-        exploreField explorer 85 { PosX = 1501; PosY = 0 } { PosX = 3500; PosY = 3500 } 10 2
+        exploreField explorer 14 { PosX = 1501; PosY = 0 } { PosX = 3500; PosY = 3500 } 5 1
         exploreField explorer 5 { PosX = 0; PosY = 0 } { PosX = 1500; PosY = 3500 } 5 1
     } |> Async.Parallel |> Async.Ignore |> Async.RunSynchronously
     do! Async.Sleep(Int32.MaxValue)
