@@ -69,7 +69,7 @@ let digger (client: Client)
                 | HttpStatusCode.NotFound -> 
                     if msg.Depth < 10 then
                         inbox.Post (DiggerMessage.DiggerDigMessage ({ msg with Depth = msg.Depth + 1 }))
-                | HttpStatusCode.UnprocessableEntity -> ()
+                | HttpStatusCode.UnprocessableEntity -> Console.WriteLine("unprocessable: " + msg.ToString())
                 | HttpStatusCode.Forbidden -> Console.WriteLine("Forbidden for: " + license.ToString())
                 | _ -> inbox.Post (DiggerDigMessage (msg)) // retry
             | _ -> inbox.Post (DiggerDigMessage (msg)) // retry
@@ -85,7 +85,7 @@ let digger (client: Client)
                 })
             |> Async.Parallel
             |> Async.Ignore
-            |> Async.RunSynchronously
+            |> Async.StartImmediate
             let digged = treasures.treasures |> Seq.length
             if digged < msg.Amount then
                 inbox.Post (DiggerDigMessage (({ msg with Depth = msg.Depth + 1; Amount = msg.Amount - digged }))) 
@@ -123,7 +123,7 @@ let digger (client: Client)
                 match msg with
                 | DiggerDigMessage digMsg ->
                     if digMsg.Amount > 0 && digMsg.Depth <= 10 then
-                        doDig state.License.Value digMsg |> Async.Start
+                        doDig state.License.Value digMsg |> Async.StartImmediate
                         return { state with License = Some { state.License.Value with digUsed = state.License.Value.digUsed + 1 } }
                     else
                         return state
@@ -349,7 +349,7 @@ let diggingLicensesCostOptimizer (client: Client) (spendLimit: float) (maxExplor
                         let (optimalCost, _) = 
                             newState.LicensesCost 
                             |> Map.toSeq 
-                            |> Seq.map (fun (cost, digAllowed) -> cost, (float cost / (float digAllowed - 3.0)))
+                            |> Seq.map (fun (cost, digAllowed) -> cost, (float cost / (float digAllowed)))
                             |> Seq.sortBy (fun (cost, costPerDig) -> costPerDig, cost)
                             |> Seq.find (fun _ -> true)
                         Console.WriteLine("optimal cost is " + optimalCost.ToString() + " time: " + DateTime.Now.ToString())
@@ -397,7 +397,7 @@ let inline exploreField (explorer: Area -> Async<int>) (timeout: int) (startCoor
         for y in startCoordinates.PosY .. stepY .. maxPosY do
             let area = { posX = x; posY = y; sizeX = stepX; sizeY = stepY }
             explorer area |> Async.Ignore |> Async.Start
-            do! Async.Sleep(timeout)
+            do! Async.Sleep(timeout + int (Math.Sqrt(float(x - startCoordinates.PosX))) / 100)
     }
 
 let inline game (client: Client) = async {
@@ -411,10 +411,8 @@ let inline game (client: Client) = async {
     let digAreaSize = { SizeX = 5; SizeY = 1 }
     let explorer = explore client diggerAgentsPool digAreaSize
     seq {
-        exploreField explorer 100 { PosX = 1501; PosY = 0 } { PosX = 3500; PosY = 3500 } 10 2
-        exploreField explorer 10 { PosX = 0; PosY = 0 } { PosX = 1500; PosY = 3500 } 5 1
-        //exploreField explorer 30 { PosX = 501; PosY = 0 } { PosX = 1000; PosY = 3500 } 5 1
-        //exploreField explorer 30 { PosX = 1001; PosY = 0 } { PosX = 1500; PosY = 3500 } 5 1
+        exploreField explorer 85 { PosX = 1501; PosY = 0 } { PosX = 3500; PosY = 3500 } 10 2
+        exploreField explorer 6 { PosX = 0; PosY = 0 } { PosX = 1500; PosY = 3500 } 5 1
     } |> Async.Parallel |> Async.Ignore |> Async.RunSynchronously
     do! Async.Sleep(Int32.MaxValue)
 }

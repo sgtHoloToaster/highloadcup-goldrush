@@ -11,11 +11,9 @@ type ExploreResult = {
     amount: int
 }
 
-let jsonSerializerOptions: JsonSerializerOptions = new JsonSerializerOptions()
-
 let inline deserializeResponseBody<'T> (response: HttpResponseMessage) =
     async {
-        return! JsonSerializer.DeserializeAsync<'T>(response.Content.ReadAsStream(), jsonSerializerOptions).AsTask() |> Async.AwaitTask
+        return! Utf8Json.JsonSerializer.DeserializeAsync<'T>(response.Content.ReadAsStream()) |> Async.AwaitTask
     }
 
 let inline processResponse<'T> (response: HttpResponseMessage) =
@@ -26,7 +24,7 @@ let inline processResponse<'T> (response: HttpResponseMessage) =
 
 type Client(baseUrl: string) =
     let persistentClient = new HttpClient(Timeout = TimeSpan.FromSeconds(300.0))
-    let nonPersistentClient = new HttpClient(Timeout = TimeSpan.FromSeconds(120.0))
+    let nonPersistentClient = new HttpClient(Timeout = TimeSpan.FromSeconds(30.0))
     let licensesUrl = baseUrl + "licenses"
     let digUrl = baseUrl + "dig"
     let cashUrl = baseUrl + "cash"
