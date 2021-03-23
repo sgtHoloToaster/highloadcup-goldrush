@@ -147,7 +147,7 @@ let digger (treasureResender: MailboxProcessor<TreasureRetryMessage>)
                 | DiggerOptimalDepthMessage optimalDepth ->
                     return { state with OptimalDepth = (Some optimalDepth) }
                 | AddCoinsToBuyLicense (optimalLicenseCost, newCoins) ->
-                    return { state with Coins = newCoins; OptimalLicenseCost = optimalLicenseCost }
+                    return { state with Coins = state.Coins |> Seq.append newCoins; OptimalLicenseCost = optimalLicenseCost }
             else
                 let! (optimalLicenseCost, coins) = async {
                     if not(Seq.isEmpty state.Coins) then return state.OptimalLicenseCost, state.Coins
@@ -308,15 +308,18 @@ let diggingLicensesCostOptimizer (maxExploreCost: int) (inbox: MailboxProcessor<
         let licenseCost = if state.OptimalCost.IsSome then state.OptimalCost.Value else state.ExploreCost
         let! wallet = getWallet state licenseCost
         let coinsCount = wallet |> Seq.length
+        Console.WriteLine("coins: " + coinsCount.ToString() + " dt: " + DateTime.Now.ToString())
         if coinsCount >= licenseCost then
             return 
                 if state.OptimalCost.IsNone then
                     digger.Post (AddCoinsToBuyLicense (licenseCost, (wallet |> Seq.truncate licenseCost)))
                     { state with ExploreCost = state.ExploreCost + 1; Wallet = wallet |> Seq.skip licenseCost }
                 else
-                    digger.Post (AddCoinsToBuyLicense (state.OptimalCost.Value, wallet))
-                    { state with Wallet = Seq.empty }
-        else return { state with Wallet = wallet }
+                    let minCoins = Math.Min(coinsCount, 250)
+                    let maxCoins = Math.Max(coinsCount / 2, minCoins)
+                    digger.Post (AddCoinsToBuyLicense (state.OptimalCost.Value, wallet |> Seq.truncate maxCoins))
+                    { state with Wallet = wallet |> Seq.skip maxCoins }
+        else return state
     }    
     
     let inline processMessage state msg = async {
@@ -348,7 +351,7 @@ let diggingLicensesCostOptimizer (maxExploreCost: int) (inbox: MailboxProcessor<
          
     messageLoop { LicensesCost = Map.empty; ExploreCost = 1; OptimalCost = None; Wallet = Seq.empty }
 
-let depthCoefs = Map[1, 1.0; 2, 0.97; 3, 0.95; 4, 0.92; 5, 0.89; 6, 0.83; 7, 0.75; 8, 0.71; 9, 0.66; 10, 0.6]
+let depthCoefs = Map[1, 1.0; 2, 0.97; 3, 0.95; 4, 0.92; 5, 0.89; 6, 0.83; 7, 0.78; 8, 0.7; 9, 0.63; 10, 0.55]
 let diggingDepthOptimizer (inbox: MailboxProcessor<DiggingDepthOptimizerMessage>) =
     let rec messageLoop (diggers: MailboxProcessor<DiggerMessage> seq) (treasuresCost: Map<int, int>) = async {
         if treasuresCost.Count = 10 then
