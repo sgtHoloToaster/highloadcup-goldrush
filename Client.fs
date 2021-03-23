@@ -57,65 +57,63 @@ let inline processResponse<'T> (response: HttpResponseMessage) =
         return Ok body
     }
 
-type Client(baseUrl: string) =
-    let persistentClient = new HttpClient(Timeout = TimeSpan.FromSeconds(300.0))
-    let nonPersistentClient = new HttpClient(Timeout = TimeSpan.FromSeconds(30.0))
-    let licensesUrl = baseUrl + "licenses"
-    let digUrl = baseUrl + "dig"
-    let cashUrl = baseUrl + "cash"
-    let exploreUrl = baseUrl + "explore"
-    let balanceUrl = baseUrl + "balance"
-    member inline private this.Post<'T, 'T1> (client: HttpClient) (url: string) (body: 'T1) = 
-        async {
-            try
-                let! response = client.PostAsJsonAsync(url, body) |> Async.AwaitTask
-                response.EnsureSuccessStatusCode() |> ignore
-                return! processResponse<'T> response
-            with
-            | :? AggregateException as aggex -> 
-                match aggex.InnerException with
-                | :? HttpRequestException as ex -> return Error (ex :> Exception)
-                | _ -> Console.WriteLine(url + " " + aggex.InnerException.Message); return Error aggex.InnerException
+let baseUrl = "http://" + Environment.GetEnvironmentVariable("ADDRESS") + ":8000/"
+let licensesUrl = baseUrl + "licenses"
+let digUrl = baseUrl + "dig"
+let cashUrl = baseUrl + "cash"
+let exploreUrl = baseUrl + "explore"
+let balanceUrl = baseUrl + "balance"
+let inline private post<'T, 'T1> (client: HttpClient) (url: string) (body: 'T1) = 
+    async {
+        try
+            let! response = client.PostAsJsonAsync(url, body) |> Async.AwaitTask
+            response.EnsureSuccessStatusCode() |> ignore
+            return! processResponse<'T> response
+        with
+        | :? AggregateException as aggex -> 
+            match aggex.InnerException with
+            | :? HttpRequestException as ex -> return Error (ex :> Exception)
+            | _ -> Console.WriteLine(url + " " + aggex.InnerException.Message); return Error aggex.InnerException
+        | :? HttpRequestException as ex -> 
+            return Error (ex :> Exception)
+    }
+
+let inline private get<'T> (client: HttpClient) (url: string) =
+    async {
+        try
+            let! response = client.GetAsync(url) |> Async.AwaitTask
+            return! processResponse<'T> response
+        with
+        | :? AggregateException as aggex -> 
+            match aggex.InnerException with
             | :? HttpRequestException as ex -> 
                 return Error (ex :> Exception)
-        }
+            | _ -> Console.WriteLine(aggex.InnerException); return Error aggex.InnerException
+        | :? HttpRequestException as ex -> 
+            return Error (ex :> Exception)
+    }
 
-    member inline private this.Get<'T> (client: HttpClient) (url: string) =
-        async {
-            try
-                let! response = client.GetAsync(url) |> Async.AwaitTask
-                return! processResponse<'T> response
-            with
-            | :? AggregateException as aggex -> 
-                match aggex.InnerException with
-                | :? HttpRequestException as ex -> 
-                    return Error (ex :> Exception)
-                | _ -> Console.WriteLine(aggex.InnerException); return Error aggex.InnerException
-            | :? HttpRequestException as ex -> 
-                return Error (ex :> Exception)
-        }
+let inline postLicense client (coins: int seq) =  
+    post<LicenseDto, int seq> client licensesUrl coins
 
-    member this.PostLicense (coins: int seq) =  
-        this.Post<LicenseDto, int seq> persistentClient licensesUrl coins
+let inline getLicenses client =
+    get<LicenseDto seq> client licensesUrl
 
-    member this.GetLicenses() =
-        this.Get<LicenseDto seq> nonPersistentClient licensesUrl
+let inline postDig client (dig: DigDto) =
+    async {
+        let! response = post<string seq, DigDto> client digUrl dig
+        return match response with 
+                | Ok treasures -> Ok { treasures = treasures }
+                | Error err -> Error err
+    }
 
-    member this.PostDig (dig: DigDto) =
-        async {
-            let! response = this.Post<string seq, DigDto> nonPersistentClient digUrl dig
-            return match response with 
-                   | Ok treasures -> Ok { treasures = treasures }
-                   | Error err -> Error err
-        }
+let inline postCash client (treasure: string) =
+    post<int seq, string> client cashUrl treasure
 
-    member this.PostCash (treasure: string) =
-        this.Post<int seq, string> persistentClient cashUrl treasure
+let inline postExplore client (area: AreaDto) = 
+    async {
+        return! post<ExploreResult, AreaDto> client exploreUrl area
+    }
 
-    member this.PostExplore (area: AreaDto) = 
-        async {
-            return! this.Post<ExploreResult, AreaDto> nonPersistentClient exploreUrl area
-        }
-
-    member this.GetBalance() =
-        this.Get<WalletDto> nonPersistentClient balanceUrl
+let inline getBalance client =
+    get<WalletDto> client balanceUrl
