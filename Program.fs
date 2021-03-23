@@ -69,7 +69,7 @@ let digger (treasureResender: MailboxProcessor<TreasureRetryMessage>)
         (diggingLicenseCostOptimizer: MailboxProcessor<DiggingLicenseCostOptimizerMessage>) 
         (inbox: MailboxProcessor<DiggerMessage>) = 
     let inline postTreasure depth treasure = async {
-        let! result = postCash treasure
+        let! result = postCash treasure |> Async.AwaitTask
         return match result with 
                 | Ok coins -> 
                     diggingDepthOptimizer.Post (TreasureReport { Depth = depth; Coins = coins |> Seq.length })
@@ -78,7 +78,7 @@ let digger (treasureResender: MailboxProcessor<TreasureRetryMessage>)
 
     let inline doDig (license: License) msg = async {
         let dig = { licenseID = license.Id; posX = msg.PosX; posY = msg.PosY; depth = msg.Depth }
-        let! treasuresResult = postDig dig
+        let! treasuresResult = postDig dig |> Async.AwaitTask
         match treasuresResult with 
         | Error ex -> 
             match ex with 
@@ -161,7 +161,7 @@ let digger (treasureResender: MailboxProcessor<TreasureRetryMessage>)
 
                 let coinsToBuyLicense = coins |> Seq.truncate optimalLicenseCost
                 let coinsToBuyLicenseCount = coinsToBuyLicense |> Seq.length
-                let! licenseUpdateResult = postLicense coinsToBuyLicense
+                let! licenseUpdateResult = postLicense coinsToBuyLicense |> Async.AwaitTask
                 let coinsLeft = coins |> Seq.skip coinsToBuyLicenseCount
                 return match licenseUpdateResult with 
                        | Ok newLicense -> 
@@ -185,13 +185,13 @@ let digger (treasureResender: MailboxProcessor<TreasureRetryMessage>)
 let oneBlockArea = { posX = 0; posY = 0; sizeX = 1; sizeY = 1 }
 let inline explore (diggerAgentsPool: unit -> MailboxProcessor<DiggerMessage>) (area: AreaDto) =
     let rec exploreArea (area: AreaDto) = async {
-        let! exploreResult = postExplore(area)
+        let! exploreResult = postExplore(area) |> Async.AwaitTask
         match exploreResult with 
         | Ok _ -> return  exploreResult
         | Error _ -> return! exploreArea area
     }
 
-    let rec exploreOneBlock (coordinates: Coordinates) = 
+    let exploreOneBlock (coordinates: Coordinates) = 
         exploreArea { oneBlockArea with posX = coordinates.PosX; posY = coordinates.PosY }
 
     let rec exploreAndDigAreaByBlocks (area: AreaDto) (amount: int) (currentCoordinates: Coordinates): Async<int> = async {
@@ -232,7 +232,7 @@ let inline explore (diggerAgentsPool: unit -> MailboxProcessor<DiggerMessage>) (
 let treasureResender (inbox: MailboxProcessor<TreasureRetryMessage>) =
     let rec messageLoop() = async {
         let! msg = inbox.Receive()
-        let! result = postCash msg.Treasure
+        let! result = postCash msg.Treasure |> Async.AwaitTask
         match result, msg.Retry with
         | Ok _, _ -> ()
         | Error _, 3 -> ()
@@ -290,7 +290,7 @@ type LicensesCostOptimizerState = {
 
 let diggingLicensesCostOptimizer (maxExploreCost: int) (inbox: MailboxProcessor<DiggingLicenseCostOptimizerMessage>) =
     let rec getBalanceFromServer() = async {
-        let! result = getBalance()
+        let! result = getBalance() |> Async.AwaitTask
         match result with
         | Ok balance -> return balance
         | Error _ -> return! getBalanceFromServer()
@@ -351,7 +351,7 @@ let diggingLicensesCostOptimizer (maxExploreCost: int) (inbox: MailboxProcessor<
          
     messageLoop { LicensesCost = Map.empty; ExploreCost = 1; OptimalCost = None; Wallet = Seq.empty }
 
-let depthCoefs = Map[1, 1.0; 2, 0.97; 3, 0.95; 4, 0.92; 5, 0.89; 6, 0.83; 7, 0.78; 8, 0.7; 9, 0.63; 10, 0.55]
+let depthCoefs = Map[1, 1.0; 2, 0.97; 3, 0.95; 4, 0.92; 5, 0.89; 6, 0.83; 7, 0.78; 8, 0.73; 9, 0.66; 10, 0.57]
 let diggingDepthOptimizer (inbox: MailboxProcessor<DiggingDepthOptimizerMessage>) =
     let rec messageLoop (diggers: MailboxProcessor<DiggerMessage> seq) (treasuresCost: Map<int, int>) = async {
         if treasuresCost.Count = 10 then
@@ -406,15 +406,17 @@ let inline game() = async {
     Console.WriteLine("diggers: " + diggersCount.ToString())
 
     let explorer = explore diggerAgentsPool
-    seq {
+    do! (seq {
         exploreField explorer 14 { PosX = 1501; PosY = 0 } { PosX = 3500; PosY = 3500 } 5 1
         exploreField explorer 5 { PosX = 0; PosY = 0 } { PosX = 1500; PosY = 3500 } 5 1
-    } |> Async.Parallel |> Async.Ignore |> Async.RunSynchronously
+    } |> Async.Parallel |> Async.Ignore)
     do! Async.Sleep(Int32.MaxValue)
 }
 
 [<EntryPoint>]
 let main argv =
-    Console.WriteLine("start")
-    game() |> Async.RunSynchronously |> ignore
-    0 // return an integer exit code
+  async {
+    do! Async.SwitchToThreadPool ()
+    return! game()
+  } |> Async.RunSynchronously
+  0

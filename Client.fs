@@ -3,6 +3,8 @@
 open System.Net.Http
 open System
 open System.Net.Http.Json
+open FSharp.Control.Tasks.V2
+
 
 [<Struct>]
 type LicenseDto = {
@@ -47,15 +49,10 @@ type TreasureDto = {
 }
 
 let inline deserializeResponseBody<'T> (response: HttpResponseMessage) =
-    async {
-        return! Utf8Json.JsonSerializer.DeserializeAsync<'T>(response.Content.ReadAsStream()) |> Async.AwaitTask
-    }
+    Utf8Json.JsonSerializer.DeserializeAsync<'T>(response.Content.ReadAsStream())
 
 let inline processResponse<'T> (response: HttpResponseMessage) =
-    async {
-        let! body = deserializeResponseBody<'T> response
-        return Ok body
-    }
+    deserializeResponseBody<'T> response
 
 let baseUrl = "http://" + Environment.GetEnvironmentVariable("ADDRESS") + ":8000/"
 let licensesUrl = baseUrl + "licenses"
@@ -64,11 +61,12 @@ let cashUrl = baseUrl + "cash"
 let exploreUrl = baseUrl + "explore"
 let balanceUrl = baseUrl + "balance"
 let inline private post<'T, 'T1> (client: HttpClient) (url: string) (body: 'T1) = 
-    async {
+    task {
         try
-            let! response = client.PostAsJsonAsync(url, body) |> Async.AwaitTask
+            let! response = client.PostAsJsonAsync(url, body)
             response.EnsureSuccessStatusCode() |> ignore
-            return! processResponse<'T> response
+            let! result = processResponse<'T> response
+            return Ok result
         with
         | :? AggregateException as aggex -> 
             match aggex.InnerException with
@@ -79,10 +77,11 @@ let inline private post<'T, 'T1> (client: HttpClient) (url: string) (body: 'T1) 
     }
 
 let inline private get<'T> (client: HttpClient) (url: string) =
-    async {
+    task {
         try
-            let! response = client.GetAsync(url) |> Async.AwaitTask
-            return! processResponse<'T> response
+            let! response = client.GetAsync(url)
+            let! result = processResponse<'T> response
+            return Ok result
         with
         | :? AggregateException as aggex -> 
             match aggex.InnerException with
@@ -100,20 +99,18 @@ let inline getLicenses client =
     get<LicenseDto seq> client licensesUrl
 
 let inline postDig client (dig: DigDto) =
-    async {
+    task {
         let! response = post<string seq, DigDto> client digUrl dig
         return match response with 
                 | Ok treasures -> Ok { treasures = treasures }
                 | Error err -> Error err
     }
-
+    
 let inline postCash client (treasure: string) =
     post<int seq, string> client cashUrl treasure
 
 let inline postExplore client (area: AreaDto) = 
-    async {
-        return! post<ExploreResult, AreaDto> client exploreUrl area
-    }
+    post<ExploreResult, AreaDto> client exploreUrl area
 
 let inline getBalance client =
     get<WalletDto> client balanceUrl
