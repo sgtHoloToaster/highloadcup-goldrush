@@ -71,9 +71,14 @@ let inline private post<'T, 'T1> (client: HttpClient) (url: string) (body: 'T1) 
         | :? AggregateException as aggex -> 
             match aggex.InnerException with
             | :? HttpRequestException as ex -> return Error (ex :> Exception)
-            | _ -> Console.WriteLine(url + " " + aggex.InnerException.Message); return Error aggex.InnerException
+            | _ -> 
+                //Console.WriteLine(url + " " + aggex.InnerException.Message)
+                return Error aggex.InnerException
         | :? HttpRequestException as ex -> 
             return Error (ex :> Exception)
+        | _ as ex -> 
+            //Console.WriteLine(url + " " + ex.Message)
+            return Error ex
     }
 
 let inline private get<'T> (client: HttpClient) (url: string) =
@@ -87,7 +92,9 @@ let inline private get<'T> (client: HttpClient) (url: string) =
             match aggex.InnerException with
             | :? HttpRequestException as ex -> 
                 return Error (ex :> Exception)
-            | _ -> Console.WriteLine(aggex.InnerException); return Error aggex.InnerException
+            | _ -> 
+                //Console.WriteLine(aggex.InnerException)
+                return Error aggex.InnerException
         | :? HttpRequestException as ex -> 
             return Error (ex :> Exception)
     }
