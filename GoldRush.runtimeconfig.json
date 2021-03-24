@@ -8,7 +8,9 @@
     "configProperties": {
       "System.GC.HeapHardLimitPercent": 95,
       "System.GC.Concurrent": true,
-      "System.GC.Server": true
+      "System.GC.Server": true,
+      "System.Threading.ThreadPool.MinThreads": 200,
+      "System.Threading.ThreadPool.MaxThreads": 200
     }
   }
 }
