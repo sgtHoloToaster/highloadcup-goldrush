@@ -57,12 +57,12 @@ type DiggerState = {
 
 let persistentClient = new HttpClient(Timeout=TimeSpan.FromSeconds(300.0))
 let nonPersistentClient = new HttpClient(Timeout=TimeSpan.FromSeconds(30.0))
+let absolutelyNonPersistentClient = new HttpClient(Timeout=TimeSpan.FromSeconds(0.5))
 let postCash = Client.postCash persistentClient
 let postDig = Client.postDig persistentClient
 let postLicense = Client.postLicense persistentClient
-let postExplore = Client.postExplore nonPersistentClient
+let postExplore = Client.postExplore absolutelyNonPersistentClient
 let getBalance() = Client.getBalance nonPersistentClient
-
 
 let digger (treasureResender: MailboxProcessor<TreasureRetryMessage>) 
         (diggingDepthOptimizer: MailboxProcessor<DiggingDepthOptimizerMessage>) 
