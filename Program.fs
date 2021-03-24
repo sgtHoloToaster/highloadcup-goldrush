@@ -4,6 +4,7 @@ open System
 open Client
 open System.Net.Http
 open System.Net
+open FSharp.Control.Tasks.V2
 
 [<Struct>]
 type Coordinates = {
@@ -60,6 +61,8 @@ type DiggerState = {
     ReportTreasure: bool
     ReportLicense: bool
 }
+
+let mutable isStarted = false
 
 let persistentClient = new HttpClient(Timeout=TimeSpan.FromSeconds(300.0))
 let nonPersistentClient = new HttpClient(Timeout=TimeSpan.FromSeconds(30.0))
@@ -176,7 +179,7 @@ let digger (treasureResender: MailboxProcessor<TreasureRetryMessage>)
                             if state.ReportLicense && coinsToBuyLicenseCount > 0 then
                                 diggingLicenseCostOptimizer.Post (LicenseIsBought(coinsToBuyLicenseCount, newLicense))
                             
-                            if coinsLeft |> Seq.isEmpty then
+                            if isStarted && coinsLeft |> Seq.isEmpty then
                                 diggingLicenseCostOptimizer.Post (GetCoins inbox)
                             { state with License = Some { Id = newLicense.id; DigAllowed = newLicense.digAllowed; DigUsed = 0 }
                                          OptimalLicenseCost = optimalLicenseCost; Coins = coinsLeft; ReportLicense = setLicenseReport }
@@ -190,7 +193,7 @@ let digger (treasureResender: MailboxProcessor<TreasureRetryMessage>)
     messageLoop { License = None; OptimalDepth = None; Coins = Seq.empty; OptimalLicenseCost = 1; ReportTreasure = true; ReportLicense = true }
 
 let oneBlockArea = { posX = 0; posY = 0; sizeX = 1; sizeY = 1 }
-let inline explore (diggerAgentsPool: unit -> MailboxProcessor<DiggerMessage>) (defaultErrorTimeout: int) (area: AreaDto) =
+let inline explore (diggersManager: MailboxProcessor<DiggerMessage>) (defaultErrorTimeout: int) (area: AreaDto) =
     let rec exploreArea (area: AreaDto) = async {
         let! exploreResult = postExplore(area) |> Async.AwaitTask
         match exploreResult with 
@@ -206,7 +209,7 @@ let inline explore (diggerAgentsPool: unit -> MailboxProcessor<DiggerMessage>) (
         let left = 
             match result with
             | Ok exploreResult when exploreResult.amount > 0 -> 
-                diggerAgentsPool().Post (DiggerMessage.DiggerDigMessage ({ PosX = currentCoordinates.PosX; PosY = currentCoordinates.PosY; Amount = exploreResult.amount; Depth = 1 }))
+                diggersManager.Post (DiggerMessage.DiggerDigMessage ({ PosX = currentCoordinates.PosX; PosY = currentCoordinates.PosY; Amount = exploreResult.amount; Depth = 1 }))
                 amount - exploreResult.amount
             | _ -> amount
             
@@ -355,9 +358,10 @@ let diggingLicensesCostOptimizer (maxExploreCost: int) (inbox: MailboxProcessor<
         let! msg = inbox.Receive()
         Console.WriteLine("license: " + DateTime.Now.ToString() + " msg: " + msg.ToString())
         let! newState = processMessage state msg
+        do! Async.Sleep 10
         return! messageLoop newState
     }
-         
+        
     messageLoop { LicensesCost = Map.empty; ExploreCost = 1; OptimalCost = None; Wallet = Seq.empty }
 
 let depthCoefs = Map[1, 1.0; 2, 0.97; 3, 0.95; 4, 0.92; 5, 0.89; 6, 0.83; 7, 0.78; 8, 0.73; 9, 0.68; 10, 0.6]
@@ -380,7 +384,7 @@ let diggingDepthOptimizer (inbox: MailboxProcessor<DiggingDepthOptimizerMessage>
                     for digger in diggers do
                         digger.Post (DiggerOptimalDepthMessage optimalDepth)
 
-                    do! Async.Sleep 20000
+                    do! Async.Sleep 60000
                     for digger in diggers do digger.Post (SetTreasureReport true)
                     return diggers, Map.empty
                 else return diggers, newTreasuresCost
@@ -393,7 +397,16 @@ let diggingDepthOptimizer (inbox: MailboxProcessor<DiggingDepthOptimizerMessage>
         
     messageLoop Seq.empty Map.empty
 
-let inline exploreField (explorer: AreaDto -> Async<int>) (timeout: int) (startCoordinates: Coordinates) (endCoordinates: Coordinates) (stepX: int) (stepY: int) = async {
+let diggersManager (diggerAgentsPool: unit -> MailboxProcessor<DiggerMessage>) (inbox: MailboxProcessor<DiggerMessage>) =
+    let rec messageLoop() = async {
+        let! msg = inbox.Receive()
+        diggerAgentsPool().Post msg
+        return! messageLoop()
+    }
+
+    messageLoop()
+
+let inline exploreField (explorer: AreaDto -> Async<int>) (timeout: int) (startCoordinates: Coordinates) (endCoordinates: Coordinates) (stepX: int) (stepY: int) = task {
     let maxPosX = endCoordinates.PosX - stepX
     let maxPosY = endCoordinates.PosY - stepY
     let areas = seq {
@@ -403,32 +416,45 @@ let inline exploreField (explorer: AreaDto -> Async<int>) (timeout: int) (startC
     }
 
     for area in areas do
-        explorer area |> Async.Ignore |> Async.Start
-        let timeout = timeout + int (Math.Pow(float(area.posX - startCoordinates.PosX), 2.0)) / 3000
+        do! explorer area |> Async.Ignore
+        //let timeout = timeout + int (Math.Pow(float(area.posX - startCoordinates.PosX), 2.0)) / 3000
         //Console.WriteLine("timeout: " + timeout.ToString())
-        do! Async.Sleep(timeout)
-    }
+        //do! Async.Sleep(timeout)
+    return [1]
+}
 
-let inline game() = async {
+let inline game() = task {
     let diggersCount = 10
     let treasureResenderAgent = MailboxProcessor.Start treasureResender
     let diggingDepthOptimizerAgent = MailboxProcessor.Start (diggingDepthOptimizer)
     let diggingLicenseCostOptimizerAgent = MailboxProcessor.Start (diggingLicensesCostOptimizer 50)
     let diggerAgentsPool = createAgentsPool (digger treasureResenderAgent diggingDepthOptimizerAgent diggingLicenseCostOptimizerAgent) diggersCount
+    let diggersManager = MailboxProcessor.Start (diggersManager diggerAgentsPool)
     Console.WriteLine("diggers: " + diggersCount.ToString())
 
-    let explorer = explore diggerAgentsPool 3
-    do! (seq {
-        exploreField explorer 14 { PosX = 1501; PosY = 0 } { PosX = 3500; PosY = 3500 } 5 1
+    let explorer = explore diggersManager 3
+    async {
+        do! Async.Sleep 5000
+        isStarted <- true
+    } |> Async.Start
+
+    let tasks = [
+        exploreField explorer 14 { PosX = 3001; PosY = 0 } { PosX = 3500; PosY = 3500 } 5 1
+        exploreField explorer 14 { PosX = 2501; PosY = 0 } { PosX = 3000; PosY = 3500 } 5 1
+        exploreField explorer 14 { PosX = 1531; PosY = 0 } { PosX = 2500; PosY = 3500 } 5 1
+        exploreField explorer 14 { PosX = 1511; PosY = 0 } { PosX = 1530; PosY = 3500 } 5 1
+        exploreField explorer 8 { PosX = 1501; PosY = 0 } { PosX = 1510; PosY = 3500 } 5 1
         exploreField explorer 5 { PosX = 0; PosY = 0 } { PosX = 1500; PosY = 3500 } 5 1
-    } |> Async.Parallel |> Async.Ignore)
+    ]
+
+    let! _ = (tasks |> System.Threading.Tasks.Task.WhenAll)
     do! Async.Sleep(Int32.MaxValue)
 }
 
 [<EntryPoint>]
 let main argv =
-  async {
-    do! Async.SwitchToThreadPool ()
+  task {
+    //do! Async.SwitchToThreadPool ()
     return! game()
-  } |> Async.RunSynchronously
+  } |> Async.AwaitTask |> Async.RunSynchronously
   0
