@@ -4,7 +4,6 @@ open System
 open Client
 open System.Net.Http
 open System.Net
-open FSharp.Control.Tasks.V2
 open Hopac
 
 [<Struct>]
@@ -485,13 +484,12 @@ let inline game() = job {
         isStarted <- true
     } |> Job.startIgnore |> ignore
 
+    let explorersCount = 10
+    let maxX = 3500
+    let step = maxX / explorersCount
     let tasks = [
-        exploreField explorer 14 { PosX = 3001; PosY = 0 } { PosX = 3500; PosY = 3500 } 5 1
-        exploreField explorer 14 { PosX = 2501; PosY = 0 } { PosX = 3000; PosY = 3500 } 5 1
-        exploreField explorer 14 { PosX = 1531; PosY = 0 } { PosX = 2500; PosY = 3500 } 5 1
-        exploreField explorer 14 { PosX = 1511; PosY = 0 } { PosX = 1530; PosY = 3500 } 5 1
-        exploreField explorer 8 { PosX = 1501; PosY = 0 } { PosX = 1510; PosY = 3500 } 5 1
-        exploreField explorer 5 { PosX = 0; PosY = 0 } { PosX = 1500; PosY = 3500 } 5 1
+        for i in 1 .. explorersCount do 
+            exploreField explorer 14 { PosX = (step * i) - step; PosY = 0 } { PosX = step * i; PosY = 3500 } 5 1
     ]
 
     do! tasks |> Job.conIgnore
