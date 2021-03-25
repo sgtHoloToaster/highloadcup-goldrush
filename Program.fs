@@ -359,7 +359,7 @@ let diggingLicensesCostOptimizer (maxExploreCost: int) = job {
         | GetCoins digger -> return! sendCoins state digger
         | LicenseIsBought (licenseCost, license) -> 
             return 
-                if state.OptimalCost.IsSome then Console.WriteLine("license: " + DateTime.Now.ToString()); state
+                if state.OptimalCost.IsSome then state
                 else
                     let newState = if state.LicensesCost.ContainsKey licenseCost then state
                                     else { state with LicensesCost = (state.LicensesCost.Add (licenseCost, license.digAllowed)) }
@@ -377,7 +377,7 @@ let diggingLicensesCostOptimizer (maxExploreCost: int) = job {
 
     let rec messageLoop (state: LicensesCostOptimizerState) = job {
         let! msg = Ch.take c.reqCh
-        Console.WriteLine("license: " + DateTime.Now.ToString() + " msg: " + msg.ToString())
+        //Console.WriteLine("license: " + DateTime.Now.ToString() + " msg: " + msg.ToString())
         let! newState = processMessage state msg
         do! timeOutMillis 10
         return! messageLoop newState
@@ -479,10 +479,10 @@ let inline game() = job {
     Console.WriteLine("diggers: " + diggersCount.ToString())
 
     let explorer = explore diggersManager 3
-    job {
-        do! timeOutMillis 5000
+    async {
+        do! Async.Sleep 5000
         isStarted <- true
-    } |> Job.startIgnore |> ignore
+    } |> Async.Start
 
     let explorersCount = 10
     let maxX = 3500
