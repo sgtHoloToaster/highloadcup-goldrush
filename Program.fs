@@ -487,7 +487,7 @@ let inline game() = job {
 
     let explorer = explore diggersManager 3
 
-    let explorersCount = 20
+    let explorersCount = 14
     Console.WriteLine("explorers count: " + explorersCount.ToString())
     let maxX = 3500
     let step = maxX / explorersCount
