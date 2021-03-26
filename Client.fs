@@ -3,8 +3,7 @@
 open System.Net.Http
 open System
 open System.Net.Http.Json
-open FSharp.Control.Tasks.V2
-
+open Hopac
 
 [<Struct>]
 type LicenseDto = {
@@ -60,7 +59,7 @@ let digUrl = baseUrl + "dig"
 let cashUrl = baseUrl + "cash"
 let exploreUrl = baseUrl + "explore"
 let balanceUrl = baseUrl + "balance"
-let inline private post<'T, 'T1> (client: HttpClient) (url: string) (body: 'T1) = task {
+let inline private post<'T, 'T1> (client: HttpClient) (url: string) (body: 'T1) = job {
         try
             let! response = client.PostAsJsonAsync(url, body)
             response.EnsureSuccessStatusCode() |> ignore
@@ -72,7 +71,7 @@ let inline private post<'T, 'T1> (client: HttpClient) (url: string) (body: 'T1) 
             return Error ex
     }
 
-let inline private get<'T> (client: HttpClient) (url: string) = task {
+let inline private get<'T> (client: HttpClient) (url: string) = job {
         try
             let! response = client.GetAsync(url)
             let! result = processResponse<'T> response
@@ -87,7 +86,7 @@ let inline postLicense client (coins: int seq) =
 let inline getLicenses client =
     get<LicenseDto seq> client licensesUrl
 
-let inline postDig client (dig: DigDto) = task {
+let inline postDig client (dig: DigDto) = job {
         let! response = post<string seq, DigDto> client digUrl dig
         return match response with 
                 | Ok treasures -> Ok { treasures = treasures }

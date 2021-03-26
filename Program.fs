@@ -73,7 +73,7 @@ type TreasureSenderCh = { reqCh: Ch<TreasureSenderMessage>; }
 
 let persistentClient = new HttpClient(Timeout=TimeSpan.FromSeconds(300.0))
 let nonPersistentClient = new HttpClient(Timeout=TimeSpan.FromSeconds(30.0))
-let absolutelyNonPersistentClient = new HttpClient(Timeout=TimeSpan.FromSeconds(0.5))
+let absolutelyNonPersistentClient = new HttpClient(Timeout=TimeSpan.FromSeconds(0.15))
 let postCash = Client.postCash persistentClient
 let postDig = Client.postDig persistentClient
 let postLicense = Client.postLicense persistentClient
@@ -100,7 +100,7 @@ let digger (digManCh: DigManCh) (treasureSender: TreasureSenderCh) (diggingLicen
             | _ -> do! Ch.send digManCh.reqCh (DiggerDigMessage (msg)) // retry
         | Ok treasures -> 
             for treasure in treasures.treasures do
-                do! Ch.give treasureSender.reqCh (SendTreasureMessage { Treasure = treasure; Retry = 0; Depth = msg.Depth })
+                do! Ch.send treasureSender.reqCh (SendTreasureMessage { Treasure = treasure; Retry = 0; Depth = msg.Depth })
             let digged = treasures.treasures |> Seq.length
             if digged < msg.Amount then
                 do! Ch.send digManCh.reqCh (DiggerDigMessage (({ msg with Depth = msg.Depth + 1; Amount = msg.Amount - digged }))) 
@@ -350,13 +350,10 @@ let diggingDepthOptimizer (digManCh: DigManCh) (treasureSenderCh: TreasureSender
                 if treasuresCost.Count = 10 then
                     let sorted = treasuresCost |> Seq.mapFold (fun state kv -> ((kv.Key, state + kv.Value), state + kv.Value)) 0
                                                 |> (fun (agg, _) -> agg |> Seq.sortBy (fun (key, value) -> ((float value) / (float key)) * depthCoefs.[key]))
-                    let log = String.Join(",", (sorted |> Seq.toArray))
                     let (optimalDepth, _) = sorted |> Seq.last
-                    Console.WriteLine(log)
-                    Console.WriteLine("optimal is: " + optimalDepth.ToString())
                     do! Ch.send digManCh.reqCh (DiggerOptimalDepthMessage optimalDepth)
 
-                    do! timeOutMillis 30000
+                    do! timeOutMillis 60000
                     do! Ch.send treasureSenderCh.reqCh (SetTreasureReport true)
                     return Map.empty
                 else return newTreasuresCost
@@ -416,8 +413,6 @@ let inline exploreField (explorer: AreaDto -> Job<int>) (startCoordinates: Coord
 }
 
 let inline game() = job {
-    Console.WriteLine("7х1")
-    Console.WriteLine(String.Join(",", (depthCoefs |> Seq.map (fun kv -> kv.Value.ToString()) |> Seq.toArray)))
     let diggersCount = 10
     let digManCh: DigManCh = { reqCh = Ch(); replyCh = Ch() }
     let treasureSenderCh: TreasureSenderCh = { reqCh = Ch() }
@@ -427,12 +422,10 @@ let inline game() = job {
     let! diggers = [for i in 1 .. diggersCount do  digger digManCh treasureResenderAgent diggingLicenseCostOptimizerAgent] |> Job.conCollect
     //let diggerAgentsPool = infiniteEnumerator diggers
     let! diggersManager = diggersManager digManCh diggers
-    Console.WriteLine("diggers: " + diggersCount.ToString())
 
     let explorer = explore diggersManager 2
 
     let explorersCount = 14
-    Console.WriteLine("explorers count: " + explorersCount.ToString())
     let maxX = 3500
     let step = maxX / explorersCount
     let tasks = [
@@ -446,12 +439,9 @@ let inline game() = job {
 
 [<EntryPoint>]
 let main argv =
-  Console.WriteLine("entry")
   game() |> start
-  Console.WriteLine("started")
   async {
     do! Async.SwitchToThreadPool()
     do! Async.Sleep Int32.MaxValue
   } |> Async.RunSynchronously
-  Console.WriteLine("exited")
   0
