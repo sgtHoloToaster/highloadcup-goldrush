@@ -6,6 +6,8 @@ open System.Net.Http
 open System.Net
 open Hopac
 
+let systemStarted = Environment.TickCount
+
 [<Struct>]
 type Coordinates = {
     PosX: int
@@ -200,7 +202,7 @@ let digger (treasureResender: TreasureResenderCh) (diggingDepthOptimizer: DepthO
         return! messageLoop newState
     }
 
-    do! Job.server (messageLoop { License = None; OptimalDepth = None; Coins = Seq.empty; OptimalLicenseCost = 1; ReportTreasure = true; ReportLicense = true })
+    do! Job.foreverServer (messageLoop { License = None; OptimalDepth = None; Coins = Seq.empty; OptimalLicenseCost = 1; ReportTreasure = true; ReportLicense = true })
     return c
 }
 
@@ -221,7 +223,7 @@ let inline explore (diggersManager: DigManCh) (defaultErrorTimeout: int) (area: 
         let! left = job {
             match result with
             | Ok exploreResult when exploreResult.amount > 0 -> 
-                do! Ch.send diggersManager.reqCh (DiggerMessage.DiggerDigMessage ({ PosX = currentCoordinates.PosX; PosY = currentCoordinates.PosY; Amount = exploreResult.amount; Depth = 1 }))
+                do! Ch.give diggersManager.reqCh (DiggerMessage.DiggerDigMessage ({ PosX = currentCoordinates.PosX; PosY = currentCoordinates.PosY; Amount = exploreResult.amount; Depth = 1 }))
                 return amount - exploreResult.amount
             | _ -> return amount
         }
@@ -244,7 +246,7 @@ let inline explore (diggersManager: DigManCh) (defaultErrorTimeout: int) (area: 
                 }
     }
 
-    let rec exploreAndDigArea  (errorTimeout: int) (area: AreaDto) = job {
+    let rec exploreAndDigArea (errorTimeout: int) (area: AreaDto) = job {
         let! result = exploreArea area
         match result with
         | Ok exploreResult -> 
@@ -264,13 +266,13 @@ let treasureResender = job {
         let! result = postCash msg.Treasure
         match result, msg.Retry with
         | Ok _, _ -> ()
-        | Error _, 1 -> ()
+        | Error _, 2 -> ()
         | _ -> do! Ch.send c.reqCh { msg with Retry = msg.Retry + 1 }
 
         return! messageLoop()
     }
         
-    do! Job.server (messageLoop())
+    do! Job.foreverServer (messageLoop())
     return c
 }
 
@@ -317,6 +319,7 @@ type LicensesCostOptimizerState = {
     ExploreCost: int
     OptimalCost: int option
     Wallet: int seq
+    LastBalanceCheck: int
 }
 
 let diggingLicensesCostOptimizer (maxExploreCost: int) = job {
@@ -329,16 +332,16 @@ let diggingLicensesCostOptimizer (maxExploreCost: int) = job {
     }
     
     let inline getWallet state coinsNeeded = job {
-        if state.Wallet |> Seq.length >= coinsNeeded then return state.Wallet
+        if state.Wallet |> Seq.length >= coinsNeeded || Environment.TickCount - state.LastBalanceCheck < 500 then return state, state.Wallet
         else return! job {
             let! balance = getBalanceFromServer()
-            return balance.wallet
+            return { state with LastBalanceCheck = Environment.TickCount }, balance.wallet
         }
     }
     
     let inline sendCoins state (digger: DiggerCh) = job {
         let licenseCost = if state.OptimalCost.IsSome then state.OptimalCost.Value else state.ExploreCost
-        let! wallet = getWallet state licenseCost
+        let! state, wallet = getWallet state licenseCost
         let coinsCount = wallet |> Seq.length
         if coinsCount >= licenseCost then
             return! job {
@@ -370,7 +373,7 @@ let diggingLicensesCostOptimizer (maxExploreCost: int) = job {
                             |> Seq.map (fun (cost, digAllowed) -> cost, (float cost / (float digAllowed)))
                             |> Seq.sortBy (fun (cost, costPerDig) -> costPerDig, cost)
                             |> Seq.find (fun _ -> true)
-                        Console.WriteLine("optimal cost is " + optimalCost.ToString() + " time: " + DateTime.Now.ToString())
+                        Console.WriteLine("optimal cost is " + optimalCost.ToString() + " for " + state.LicensesCost.[optimalCost].ToString() + " time: " + DateTime.Now.ToString())
                         { newState with OptimalCost = Some optimalCost }
                     else newState
     }
@@ -383,11 +386,11 @@ let diggingLicensesCostOptimizer (maxExploreCost: int) = job {
         return! messageLoop newState
     }
     
-    do! Job.server (messageLoop { LicensesCost = Map.empty; ExploreCost = 1; OptimalCost = None; Wallet = Seq.empty })
+    do! Job.foreverServer (messageLoop { LicensesCost = Map.empty; ExploreCost = 1; OptimalCost = None; Wallet = Seq.empty; LastBalanceCheck = Environment.TickCount })
     return c
 }
 
-let depthCoefs = Map[1, 1.0; 2, 0.97; 3, 0.95; 4, 0.92; 5, 0.89; 6, 0.83; 7, 0.78; 8, 0.73; 9, 0.68; 10, 0.6]
+let depthCoefs = Map[1, 3.0; 2, 2.0; 3, 1.3; 4, 1.1; 5, 1.05; 6, 0.9; 7, 0.77; 8, 0.72; 9, 0.67; 10, 0.62]
 let diggingDepthOptimizer (digManCh: DigManCh) = job {
     let c: DepthOptimizerCh = { reqCh = Ch (); replyCh = Ch ()}
     let rec messageLoop (treasuresCost: Map<int, int>) = job {
@@ -416,37 +419,37 @@ let diggingDepthOptimizer (digManCh: DigManCh) = job {
         return! messageLoop newTreasuresCost
     }
         
-    do! Job.start (messageLoop Map.empty)
+    do! Job.foreverServer (messageLoop Map.empty)
     return c
 }
 
 [<Struct>]
 type DiggerManagerState = { OptimalDepth: int option }
-let diggersManager (c: DigManCh) (diggerAgentsPool: unit -> DiggerCh) = job {
+let diggersManager (c: DigManCh) (diggers: DiggerCh seq) = job {
+    let diggerAgentsPool = infiniteEnumerator diggers
     let rec messageLoop state = job {
         let! msg = Ch.take c.reqCh
-        let digger = diggerAgentsPool()
         let! newState = job {
             match msg with 
             | DiggerDigMessage digMsg -> 
                 if state.OptimalDepth.IsSome && digMsg.Depth <= state.OptimalDepth.Value then
-                    do! Ch.send digger.prReqCh msg
-                else do! Ch.send digger.reqCh msg
+                    do! Alt.choosy [|for digger in diggers do Ch.give digger.prReqCh msg|]
+                else do! Alt.choosy [|for digger in diggers do Ch.give digger.reqCh msg|]
                 return state
             | AddCoinsToBuyLicense msg -> 
-                do! Ch.send digger.coinsCh msg
+                do! Ch.send (diggerAgentsPool().coinsCh) msg
                 return state
             | DiggerOptimalDepthMessage depth ->
                 return { state with OptimalDepth = Some depth }
             | _ as msg -> 
-                do! Ch.send digger.reqCh msg
+                do! Ch.send (diggerAgentsPool().reqCh) msg
                 return state
         }
 
         return! messageLoop newState
     }
 
-    do! Job.server (messageLoop { OptimalDepth = None })
+    do! Job.foreverServer (messageLoop { OptimalDepth = None })
     return c
 }
 
@@ -461,35 +464,37 @@ let inline exploreField (explorer: AreaDto -> Job<int>) (timeout: int) (startCoo
 
     for area in areas do
         do! explorer area |> Job.Ignore
+        //let! amount = explorer area
+        //do! timeOutMillis (amount * int((Math.Pow(Math.Min(float(area.posX - startCoordinates.PosX), 1.0), 3.0) / 10000.0)))
         //let timeout = timeout + int (Math.Pow(float(area.posX - startCoordinates.PosX), 2.0)) / 3000
         //Console.WriteLine("timeout: " + timeout.ToString())
         //do! Async.Sleep(timeout)
+
     return [1]
 }
 
 let inline game() = job {
+    Console.WriteLine("7х1")
+    Console.WriteLine(String.Join(",", (depthCoefs |> Seq.map (fun kv -> kv.Value.ToString()) |> Seq.toArray)))
     let diggersCount = 10
     let! treasureResenderAgent = treasureResender
     let digManCh: DigManCh = { reqCh = Ch(); replyCh = Ch() }
     let! diggingDepthOptimizerAgent = diggingDepthOptimizer digManCh
     let! diggingLicenseCostOptimizerAgent = diggingLicensesCostOptimizer 50
     let! diggers = [for i in 1 .. diggersCount do  digger treasureResenderAgent diggingDepthOptimizerAgent diggingLicenseCostOptimizerAgent] |> Job.conCollect
-    let diggerAgentsPool = infiniteEnumerator diggers
-    let! diggersManager = diggersManager digManCh diggerAgentsPool
+    //let diggerAgentsPool = infiniteEnumerator diggers
+    let! diggersManager = diggersManager digManCh diggers
     Console.WriteLine("diggers: " + diggersCount.ToString())
 
     let explorer = explore diggersManager 3
-    async {
-        do! Async.Sleep 5000
-        isStarted <- true
-    } |> Async.Start
 
-    let explorersCount = 10
+    let explorersCount = 25
+    Console.WriteLine("explorers count: " + explorersCount.ToString())
     let maxX = 3500
     let step = maxX / explorersCount
     let tasks = [
         for i in 1 .. explorersCount do 
-            exploreField explorer 14 { PosX = (step * i) - step; PosY = 0 } { PosX = step * i; PosY = 3500 } 5 1
+            exploreField explorer 14 { PosX = (step * i) - step; PosY = 0 } { PosX = step * i; PosY = 3500 } 7 1
     ]
 
     do! tasks |> Job.conIgnore
