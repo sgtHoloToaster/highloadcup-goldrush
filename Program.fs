@@ -40,7 +40,6 @@ type DiggerMessage =
     DiggerDigMessage of DiggerDigMessage 
     | DiggerOptimalDepthMessage of depth: int 
     | AddCoinsToBuyLicense of coins: int seq
-    | SetTreasureReport of treasure: bool
     
 type DigManCh = { reqCh: Ch<DiggerMessage>; replyCh: Ch<DiggerMessage> }
 type DiggerCh = { reqCh: Ch<DiggerMessage>; prReqCh: Ch<DiggerMessage>; coinsCh: Ch<int seq>;  replyCh: Ch<DiggerMessage> }
@@ -53,43 +52,38 @@ type DiggingLicenseCostOptimizerMessage = GetCoins of DiggerCh
 
 [<Struct>]
 type TreasureRetryMessage = {
+    Depth: int
     Treasure: string
     Retry: int
 }
+
+[<Struct>]
+type TreasureSenderMessage = SendTreasureMessage of TreasureRetryMessage | SetTreasureReport of treasure: bool
 
 [<Struct>]
 type DiggerState = {
     License: License option
     OptimalDepth: int option
     Coins: int seq
-    ReportTreasure: bool
 }
 
 type DepthOptimizerCh = { reqCh: Ch<DiggingDepthOptimizerMessage>; replyCh: Ch<DiggingDepthOptimizerMessage> }
 type LicenseOptimizerCh = { reqCh: Ch<DiggingLicenseCostOptimizerMessage>; replyCh: Ch<DiggingLicenseCostOptimizerMessage> }
-type TreasureResenderCh = { reqCh: Ch<TreasureRetryMessage>; }
+type TreasureSenderCh = { reqCh: Ch<TreasureSenderMessage>; }
 
 let persistentClient = new HttpClient(Timeout=TimeSpan.FromSeconds(300.0))
 let nonPersistentClient = new HttpClient(Timeout=TimeSpan.FromSeconds(30.0))
-let absolutelyNonPersistentClient = new HttpClient(Timeout=TimeSpan.FromSeconds(0.4))
+let absolutelyNonPersistentClient = new HttpClient(Timeout=TimeSpan.FromSeconds(0.5))
 let postCash = Client.postCash persistentClient
 let postDig = Client.postDig persistentClient
 let postLicense = Client.postLicense persistentClient
 let postExplore = Client.postExplore absolutelyNonPersistentClient
 let getBalance() = Client.getBalance nonPersistentClient
 
-let digger (digManCh: DigManCh) (treasureResender: TreasureResenderCh) (diggingDepthOptimizer: DepthOptimizerCh) (diggingLicenseCostOptimizer: LicenseOptimizerCh) = job {
+let digger (digManCh: DigManCh) (treasureSender: TreasureSenderCh) (diggingLicenseCostOptimizer: LicenseOptimizerCh) = job {
     let c = { replyCh = Ch(); reqCh = Ch(); prReqCh = Ch(); coinsCh = Ch() }
-    let inline postTreasure depth reportTreasure treasure = job {
-        let! result = postCash treasure
-        match result with 
-              | Ok coins -> 
-                  if reportTreasure then
-                      do! Ch.send diggingDepthOptimizer.reqCh (TreasureReport { Depth = depth; Coins = coins |> Seq.length })
-              | _ -> do! Ch.send treasureResender.reqCh { Treasure = treasure; Retry = 0 }
-    }
 
-    let inline doDig (license: License) reportTreasure msg = job {
+    let inline doDig (license: License) msg = job {
         let dig = { licenseID = license.Id; posX = msg.PosX; posY = msg.PosY; depth = msg.Depth }
         let! treasuresResult = postDig dig
         match treasuresResult with 
@@ -99,15 +93,14 @@ let digger (digManCh: DigManCh) (treasureResender: TreasureResenderCh) (diggingD
                 match ex.StatusCode.Value with 
                 | HttpStatusCode.NotFound -> 
                     if msg.Depth < 10 then
-                        do! Ch.send c.reqCh (DiggerMessage.DiggerDigMessage ({ msg with Depth = msg.Depth + 1 }))
+                        do! Ch.send digManCh.reqCh (DiggerMessage.DiggerDigMessage ({ msg with Depth = msg.Depth + 1 }))
                 | HttpStatusCode.UnprocessableEntity -> Console.WriteLine("unprocessable: " + msg.ToString())
                 | HttpStatusCode.Forbidden -> Console.WriteLine("Forbidden for: " + license.ToString())
-                | _ -> do! Ch.send c.reqCh (DiggerDigMessage (msg)) // retry
-            | _ -> do! Ch.send c.reqCh (DiggerDigMessage (msg)) // retry
+                | _ -> do! Ch.send digManCh.reqCh (DiggerDigMessage (msg)) // retry
+            | _ -> do! Ch.send digManCh.reqCh (DiggerDigMessage (msg)) // retry
         | Ok treasures -> 
-            do! (treasures.treasures 
-            |> Seq.map (postTreasure msg.Depth reportTreasure)
-            |> Job.conIgnore)
+            for treasure in treasures.treasures do
+                do! Ch.give treasureSender.reqCh (SendTreasureMessage { Treasure = treasure; Retry = 0; Depth = msg.Depth })
             let digged = treasures.treasures |> Seq.length
             if digged < msg.Amount then
                 do! Ch.send digManCh.reqCh (DiggerDigMessage (({ msg with Depth = msg.Depth + 1; Amount = msg.Amount - digged }))) 
@@ -123,15 +116,14 @@ let digger (digManCh: DigManCh) (treasureResender: TreasureResenderCh) (diggingD
                 match msg with
                 | DiggerDigMessage digMsg ->
                     if digMsg.Amount > 0 && digMsg.Depth <= 10 then
-                        do! (doDig state.License.Value state.ReportTreasure digMsg |> Job.start)
+                        doDig state.License.Value digMsg |> startIgnore
                         return { state with License = Some { state.License.Value with DigUsed = state.License.Value.DigUsed + 1 } }
                     else
                         return state
                 | DiggerOptimalDepthMessage optimalDepth ->
-                    return { state with OptimalDepth = (Some optimalDepth); ReportTreasure = false }
+                    return { state with OptimalDepth = (Some optimalDepth) }
                 | AddCoinsToBuyLicense (newCoins) ->
                     return { state with Coins = state.Coins |> Seq.append newCoins }
-                | SetTreasureReport value -> return { state with ReportTreasure = value }
             else
                 let! (coins) = job {
                     if not(Seq.isEmpty state.Coins) then return state.Coins
@@ -166,7 +158,7 @@ let digger (digManCh: DigManCh) (treasureResender: TreasureResenderCh) (diggingD
         return! messageLoop newState
     }
 
-    do! Job.foreverServer (messageLoop { License = None; OptimalDepth = None; Coins = Seq.empty; ReportTreasure = true })
+    do! Job.foreverServer (messageLoop { License = None; OptimalDepth = None; Coins = Seq.empty })
     return c
 }
 
@@ -217,28 +209,40 @@ let inline explore (diggersManager: DigManCh) (defaultErrorTimeout: int) (area: 
             if exploreResult.amount = 0 then return 0
             else return! exploreAndDigAreaByBlocks area exploreResult.amount { PosX = area.posX; PosY = area.posY }
         | Error _ -> 
-            if errorTimeout > 10 then return 0
-            else
-                do! timeOutMillis errorTimeout
-                return! exploreAndDigArea (int(Math.Pow(float errorTimeout, 2.0))) area
+            return! exploreAndDigArea (int(Math.Pow(float errorTimeout, 2.0))) area
     }
     
     exploreAndDigArea defaultErrorTimeout area
 
-let treasureResender = job {
-    let c = { reqCh = Ch() }
-    let rec messageLoop() = job {
-        let! msg = Ch.take c.reqCh
-        let! result = postCash msg.Treasure
-        match result, msg.Retry with
-        | Ok _, _ -> ()
-        | Error _, 2 -> ()
-        | _ -> do! Ch.send c.reqCh { msg with Retry = msg.Retry + 1 }
+let treasureSender (c: TreasureSenderCh) (diggingDepthOptimizer: DepthOptimizerCh) = job {
+    let inline sendTreasure treasureMsg reportTreasure = job {
+        let! result = postCash treasureMsg.Treasure
+        match result, treasureMsg.Retry with
+        | Ok coins, _ -> 
+            if reportTreasure then
+                do! Ch.send diggingDepthOptimizer.reqCh (TreasureReport { Depth = treasureMsg.Depth; Coins = coins |> Seq.length })
 
-        return! messageLoop()
+            return reportTreasure
+        | Error _, 2 -> return reportTreasure
+        | _ -> 
+            do! Ch.send c.reqCh (SendTreasureMessage { treasureMsg with Retry = treasureMsg.Retry + 1 })
+            return reportTreasure
+    }
+
+    let rec messageLoop reportTreasure = job {
+        let! msg = Ch.take c.reqCh
+        let! reportTreasure = job {
+            match msg with
+            | SendTreasureMessage treasureMsg ->
+                sendTreasure treasureMsg reportTreasure |> startIgnore
+                return reportTreasure
+            | SetTreasureReport value -> return value
+        }
+
+        return! messageLoop reportTreasure
     }
         
-    do! Job.foreverServer (messageLoop())
+    do! Job.foreverServer (messageLoop true)
     return c
 }
 
@@ -298,7 +302,7 @@ let diggingLicensesCostOptimizer (maxExploreCost: int) = job {
     }
     
     let inline getWallet state = job {
-        if not(state.Wallet |> Seq.isEmpty) || Environment.TickCount - state.LastBalanceCheck < 1000 then return state, state.Wallet
+        if not(state.Wallet |> Seq.isEmpty) || Environment.TickCount - state.LastBalanceCheck < 500 then return state, state.Wallet
         else return! job {
             let! balance = getBalanceFromServer()
             return { state with LastBalanceCheck = Environment.TickCount }, balance.wallet
@@ -333,7 +337,7 @@ let diggingLicensesCostOptimizer (maxExploreCost: int) = job {
 }
 
 let depthCoefs = Map[1, 3.0; 2, 2.0; 3, 1.3; 4, 1.1; 5, 0.95; 6, 0.85; 7, 0.77; 8, 0.72; 9, 0.67; 10, 0.62]
-let diggingDepthOptimizer (digManCh: DigManCh) = job {
+let diggingDepthOptimizer (digManCh: DigManCh) (treasureSenderCh: TreasureSenderCh) = job {
     let c: DepthOptimizerCh = { reqCh = Ch (); replyCh = Ch ()}
     let rec messageLoop (treasuresCost: Map<int, int>) = job {
         let! msg = Ch.take c.reqCh
@@ -353,7 +357,7 @@ let diggingDepthOptimizer (digManCh: DigManCh) = job {
                     do! Ch.send digManCh.reqCh (DiggerOptimalDepthMessage optimalDepth)
 
                     do! timeOutMillis 30000
-                    do! Ch.send digManCh.reqCh (SetTreasureReport true)
+                    do! Ch.send treasureSenderCh.reqCh (SetTreasureReport true)
                     return Map.empty
                 else return newTreasuresCost
         }
@@ -383,9 +387,6 @@ let diggersManager (c: DigManCh) (diggers: DiggerCh seq) = job {
                 return state
             | DiggerOptimalDepthMessage depth ->
                 return { state with OptimalDepth = Some depth }
-            | _ as msg -> 
-                do! Ch.send (diggerAgentsPool().reqCh) msg
-                return state
         }
 
         return! messageLoop newState
@@ -401,7 +402,7 @@ let inline exploreField (explorer: AreaDto -> Job<int>) (startCoordinates: Coord
     let areas = seq {
         for x in startCoordinates.PosX .. stepX .. maxPosX do
             for y in startCoordinates.PosY .. stepY .. maxPosY do
-                yield { posX = x; posY = y; sizeX = stepX; sizeY = stepY }
+                yield { posX = x; posY = y; sizeX = Math.Min(stepX, 3500 - x); sizeY = stepY }
     }
 
     for area in areas do
@@ -418,11 +419,12 @@ let inline game() = job {
     Console.WriteLine("7х1")
     Console.WriteLine(String.Join(",", (depthCoefs |> Seq.map (fun kv -> kv.Value.ToString()) |> Seq.toArray)))
     let diggersCount = 10
-    let! treasureResenderAgent = treasureResender
     let digManCh: DigManCh = { reqCh = Ch(); replyCh = Ch() }
-    let! diggingDepthOptimizerAgent = diggingDepthOptimizer digManCh
+    let treasureSenderCh: TreasureSenderCh = { reqCh = Ch() }
+    let! diggingDepthOptimizerAgent = diggingDepthOptimizer digManCh treasureSenderCh
+    let! treasureResenderAgent = treasureSender treasureSenderCh diggingDepthOptimizerAgent
     let! diggingLicenseCostOptimizerAgent = diggingLicensesCostOptimizer 50
-    let! diggers = [for i in 1 .. diggersCount do  digger digManCh treasureResenderAgent diggingDepthOptimizerAgent diggingLicenseCostOptimizerAgent] |> Job.conCollect
+    let! diggers = [for i in 1 .. diggersCount do  digger digManCh treasureResenderAgent diggingLicenseCostOptimizerAgent] |> Job.conCollect
     //let diggerAgentsPool = infiniteEnumerator diggers
     let! diggersManager = diggersManager digManCh diggers
     Console.WriteLine("diggers: " + diggersCount.ToString())
