@@ -85,7 +85,7 @@ let postLicense = Client.postLicense persistentClient
 let postExplore = Client.postExplore absolutelyNonPersistentClient
 let getBalance() = Client.getBalance nonPersistentClient
 
-let digger (treasureResender: TreasureResenderCh) (diggingDepthOptimizer: DepthOptimizerCh) (diggingLicenseCostOptimizer: LicenseOptimizerCh) = job {
+let digger (digManCh: DigManCh) (treasureResender: TreasureResenderCh) (diggingDepthOptimizer: DepthOptimizerCh) (diggingLicenseCostOptimizer: LicenseOptimizerCh) = job {
     let c = { replyCh = Ch(); reqCh = Ch(); prReqCh = Ch(); coinsCh = Ch() }
     let inline postTreasure depth reportTreasure treasure = job {
         let! result = postCash treasure
@@ -117,7 +117,7 @@ let digger (treasureResender: TreasureResenderCh) (diggingDepthOptimizer: DepthO
             |> Job.conIgnore)
             let digged = treasures.treasures |> Seq.length
             if digged < msg.Amount then
-                do! Ch.send c.reqCh (DiggerDigMessage (({ msg with Depth = msg.Depth + 1; Amount = msg.Amount - digged }))) 
+                do! Ch.send digManCh.reqCh (DiggerDigMessage (({ msg with Depth = msg.Depth + 1; Amount = msg.Amount - digged }))) 
     }
 
     let inline exactDepthMessage depth msg =
@@ -390,7 +390,7 @@ let diggingLicensesCostOptimizer (maxExploreCost: int) = job {
     return c
 }
 
-let depthCoefs = Map[1, 3.0; 2, 2.0; 3, 1.3; 4, 1.1; 5, 1.05; 6, 0.9; 7, 0.77; 8, 0.72; 9, 0.67; 10, 0.62]
+let depthCoefs = Map[1, 3.0; 2, 2.0; 3, 1.3; 4, 1.1; 5, 0.95; 6, 0.85; 7, 0.77; 8, 0.72; 9, 0.67; 10, 0.62]
 let diggingDepthOptimizer (digManCh: DigManCh) = job {
     let c: DepthOptimizerCh = { reqCh = Ch (); replyCh = Ch ()}
     let rec messageLoop (treasuresCost: Map<int, int>) = job {
@@ -470,7 +470,6 @@ let inline exploreField (explorer: AreaDto -> Job<int>) (timeout: int) (startCoo
         //Console.WriteLine("timeout: " + timeout.ToString())
         //do! Async.Sleep(timeout)
 
-    return [1]
 }
 
 let inline game() = job {
@@ -481,14 +480,14 @@ let inline game() = job {
     let digManCh: DigManCh = { reqCh = Ch(); replyCh = Ch() }
     let! diggingDepthOptimizerAgent = diggingDepthOptimizer digManCh
     let! diggingLicenseCostOptimizerAgent = diggingLicensesCostOptimizer 50
-    let! diggers = [for i in 1 .. diggersCount do  digger treasureResenderAgent diggingDepthOptimizerAgent diggingLicenseCostOptimizerAgent] |> Job.conCollect
+    let! diggers = [for i in 1 .. diggersCount do  digger digManCh treasureResenderAgent diggingDepthOptimizerAgent diggingLicenseCostOptimizerAgent] |> Job.conCollect
     //let diggerAgentsPool = infiniteEnumerator diggers
     let! diggersManager = diggersManager digManCh diggers
     Console.WriteLine("diggers: " + diggersCount.ToString())
 
     let explorer = explore diggersManager 3
 
-    let explorersCount = 25
+    let explorersCount = 20
     Console.WriteLine("explorers count: " + explorersCount.ToString())
     let maxX = 3500
     let step = maxX / explorersCount
