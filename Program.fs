@@ -35,23 +35,21 @@ type License = {
     DigAllowed: int
 }
 
-type AddCoinsToBuyLicense =  int * int seq * bool
-
 [<Struct>]
 type DiggerMessage = 
     DiggerDigMessage of DiggerDigMessage 
     | DiggerOptimalDepthMessage of depth: int 
-    | AddCoinsToBuyLicense of coins: AddCoinsToBuyLicense
+    | AddCoinsToBuyLicense of coins: int seq
     | SetTreasureReport of treasure: bool
     
 type DigManCh = { reqCh: Ch<DiggerMessage>; replyCh: Ch<DiggerMessage> }
-type DiggerCh = { reqCh: Ch<DiggerMessage>; prReqCh: Ch<DiggerMessage>; coinsCh: Ch<AddCoinsToBuyLicense>;  replyCh: Ch<DiggerMessage> }
+type DiggerCh = { reqCh: Ch<DiggerMessage>; prReqCh: Ch<DiggerMessage>; coinsCh: Ch<int seq>;  replyCh: Ch<DiggerMessage> }
 
 [<Struct>]
 type DiggingDepthOptimizerMessage = TreasureReport of report: TreasureReportMessage
 
 [<Struct>]
-type DiggingLicenseCostOptimizerMessage = GetCoins of DiggerCh | LicenseIsBought of int * LicenseDto
+type DiggingLicenseCostOptimizerMessage = GetCoins of DiggerCh
 
 [<Struct>]
 type TreasureRetryMessage = {
@@ -64,21 +62,16 @@ type DiggerState = {
     License: License option
     OptimalDepth: int option
     Coins: int seq
-    OptimalLicenseCost: int
     ReportTreasure: bool
-    ReportLicense: bool
 }
 
 type DepthOptimizerCh = { reqCh: Ch<DiggingDepthOptimizerMessage>; replyCh: Ch<DiggingDepthOptimizerMessage> }
 type LicenseOptimizerCh = { reqCh: Ch<DiggingLicenseCostOptimizerMessage>; replyCh: Ch<DiggingLicenseCostOptimizerMessage> }
 type TreasureResenderCh = { reqCh: Ch<TreasureRetryMessage>; }
 
-
-let mutable isStarted = true
-
 let persistentClient = new HttpClient(Timeout=TimeSpan.FromSeconds(300.0))
 let nonPersistentClient = new HttpClient(Timeout=TimeSpan.FromSeconds(30.0))
-let absolutelyNonPersistentClient = new HttpClient(Timeout=TimeSpan.FromSeconds(0.5))
+let absolutelyNonPersistentClient = new HttpClient(Timeout=TimeSpan.FromSeconds(0.4))
 let postCash = Client.postCash persistentClient
 let postDig = Client.postDig persistentClient
 let postLicense = Client.postLicense persistentClient
@@ -120,42 +113,13 @@ let digger (digManCh: DigManCh) (treasureResender: TreasureResenderCh) (diggingD
                 do! Ch.send digManCh.reqCh (DiggerDigMessage (({ msg with Depth = msg.Depth + 1; Amount = msg.Amount - digged }))) 
     }
 
-    let inline exactDepthMessage depth msg =
-        match msg with
-        | DiggerDigMessage digMsg when digMsg.Depth = depth -> (Some (async { return msg }))
-        | _ -> None
-
-    let inline lessThanDepthMessage depth msg = 
-        match msg with
-        | DiggerDigMessage digMsg when digMsg.Depth <= depth -> (Some (async { return msg }))
-        | _ -> None
-
-    //let inline tryGetPriorityMessage (optimalDepth: int option) = async {
-    //    if optimalDepth.IsSome then 
-    //        return! Ch.take
-    //    else return None
-    //}
-
-    let inline receiveMessage optimalDepth = job {
-        return! Alt.choose(seq { Ch.take c.prReqCh; Ch.take c.reqCh })
-        //let! priorityMessage = tryGetPriorityMessage optimalDepth
-
-        //return! async {
-        //    match priorityMessage with
-        //    | Some priorityMessage -> return priorityMessage
-        //    | _ -> return! inbox.Receive()
-        //}
-    }
-
-    let inline addCoinsMessage msg =
-        match msg with
-        | AddCoinsToBuyLicense (optimalLicenseCost, coins, setLicenseReport) -> Some (async { return optimalLicenseCost, coins, setLicenseReport })
-        | _ -> None
+    let inline receiveMessage() =
+        Alt.choose([| Ch.take c.prReqCh; Ch.take c.reqCh |])
 
     let rec messageLoop (state: DiggerState) = job {
         let! newState = job {
             if state.License.IsSome && state.License.Value.DigAllowed > state.License.Value.DigUsed then
-                let! msg = receiveMessage state.OptimalDepth
+                let! msg = receiveMessage()
                 match msg with
                 | DiggerDigMessage digMsg ->
                     if digMsg.Amount > 0 && digMsg.Depth <= 10 then
@@ -165,44 +129,44 @@ let digger (digManCh: DigManCh) (treasureResender: TreasureResenderCh) (diggingD
                         return state
                 | DiggerOptimalDepthMessage optimalDepth ->
                     return { state with OptimalDepth = (Some optimalDepth); ReportTreasure = false }
-                | AddCoinsToBuyLicense (optimalLicenseCost, newCoins, setLicenseReport) ->
-                    return { state with Coins = state.Coins |> Seq.append newCoins; OptimalLicenseCost = optimalLicenseCost; ReportLicense = setLicenseReport }
+                | AddCoinsToBuyLicense (newCoins) ->
+                    return { state with Coins = state.Coins |> Seq.append newCoins }
                 | SetTreasureReport value -> return { state with ReportTreasure = value }
             else
-                let! (optimalLicenseCost, coins, setLicenseReport) = job {
-                    if not(Seq.isEmpty state.Coins) then return state.OptimalLicenseCost, state.Coins, state.ReportLicense
+                let! (coins) = job {
+                    if not(Seq.isEmpty state.Coins) then return state.Coins
                     else 
                         let! result = Alt.choose [
                             Ch.take c.coinsCh |> Alt.afterFun(fun coinsMsg -> (Some coinsMsg))
                             timeOutMillis 1 |> Alt.afterFun(fun _ -> None) ]
                         return 
                             match result with
-                            | Some (optimalLicenseCost, newCoins, setLicenseReport) -> optimalLicenseCost, newCoins, setLicenseReport
-                            | _ -> state.OptimalLicenseCost, Seq.empty, state.ReportLicense
+                            | Some (newCoins) -> newCoins
+                            | _ -> Seq.empty
                 }
 
-                let coinsToBuyLicense = coins |> Seq.truncate optimalLicenseCost
+                let coinsToBuyLicense = coins |> Seq.truncate 1
                 let coinsToBuyLicenseCount = coinsToBuyLicense |> Seq.length
                 let! licenseUpdateResult = postLicense coinsToBuyLicense
                 let coinsLeft = coins |> Seq.skip coinsToBuyLicenseCount
                 return! job {
                     match licenseUpdateResult with 
                        | Ok newLicense -> 
-                            if state.ReportLicense && coinsToBuyLicenseCount > 0 then
-                                do! Ch.send diggingLicenseCostOptimizer.reqCh (LicenseIsBought(coinsToBuyLicenseCount, newLicense))
+                            //if state.ReportLicense && coinsToBuyLicenseCount > 0 then
+                            //    do! Ch.send diggingLicenseCostOptimizer.reqCh (LicenseIsBought(coinsToBuyLicenseCount, newLicense))
                             
-                            if coinsLeft |> Seq.isEmpty then
+                            if coinsLeft |> Seq.length < 10 then
                                 do! Ch.send diggingLicenseCostOptimizer.reqCh (GetCoins c)
                             return { state with License = Some { Id = newLicense.id; DigAllowed = newLicense.digAllowed; DigUsed = 0 }
-                                                OptimalLicenseCost = optimalLicenseCost; Coins = coinsLeft; ReportLicense = setLicenseReport }
-                       | Error _ -> return { state with OptimalLicenseCost = optimalLicenseCost; Coins = coinsLeft; ReportLicense = setLicenseReport }
+                                                Coins = coinsLeft }
+                       | Error _ -> return { state with Coins = coinsLeft }
                 }
         }
 
         return! messageLoop newState
     }
 
-    do! Job.foreverServer (messageLoop { License = None; OptimalDepth = None; Coins = Seq.empty; OptimalLicenseCost = 1; ReportTreasure = true; ReportLicense = true })
+    do! Job.foreverServer (messageLoop { License = None; OptimalDepth = None; Coins = Seq.empty; ReportTreasure = true })
     return c
 }
 
@@ -253,8 +217,10 @@ let inline explore (diggersManager: DigManCh) (defaultErrorTimeout: int) (area: 
             if exploreResult.amount = 0 then return 0
             else return! exploreAndDigAreaByBlocks area exploreResult.amount { PosX = area.posX; PosY = area.posY }
         | Error _ -> 
-            do! timeOutMillis errorTimeout
-            return! exploreAndDigArea (int(Math.Pow(float errorTimeout, 2.0))) area
+            if errorTimeout > 10 then return 0
+            else
+                do! timeOutMillis errorTimeout
+                return! exploreAndDigArea (int(Math.Pow(float errorTimeout, 2.0))) area
     }
     
     exploreAndDigArea defaultErrorTimeout area
@@ -331,8 +297,8 @@ let diggingLicensesCostOptimizer (maxExploreCost: int) = job {
         | Error _ -> return! getBalanceFromServer()
     }
     
-    let inline getWallet state coinsNeeded = job {
-        if state.Wallet |> Seq.length >= coinsNeeded || Environment.TickCount - state.LastBalanceCheck < 500 then return state, state.Wallet
+    let inline getWallet state = job {
+        if not(state.Wallet |> Seq.isEmpty) || Environment.TickCount - state.LastBalanceCheck < 1000 then return state, state.Wallet
         else return! job {
             let! balance = getBalanceFromServer()
             return { state with LastBalanceCheck = Environment.TickCount }, balance.wallet
@@ -340,49 +306,25 @@ let diggingLicensesCostOptimizer (maxExploreCost: int) = job {
     }
     
     let inline sendCoins state (digger: DiggerCh) = job {
-        let licenseCost = if state.OptimalCost.IsSome then state.OptimalCost.Value else state.ExploreCost
-        let! state, wallet = getWallet state licenseCost
+        let! state, wallet = getWallet state
         let coinsCount = wallet |> Seq.length
-        if coinsCount >= licenseCost then
-            return! job {
-                if state.OptimalCost.IsNone then
-                    do! Ch.send digger.reqCh (AddCoinsToBuyLicense (licenseCost, (wallet |> Seq.truncate licenseCost), true))
-                    return { state with ExploreCost = state.ExploreCost + 1; Wallet = wallet |> Seq.skip licenseCost }
-                else
-                    let minCoins = Math.Min(coinsCount, 250)
-                    let maxCoins = Math.Max(coinsCount / 2, minCoins)
-                    do! Ch.send digger.reqCh (AddCoinsToBuyLicense (state.OptimalCost.Value, wallet |> Seq.truncate maxCoins, false))
-                    return { state with Wallet = wallet |> Seq.skip maxCoins }
-            }
+        if coinsCount > 0 then
+            let minCoins = Math.Min(coinsCount, 250)
+            let maxCoins = Math.Max(coinsCount / 2, minCoins)
+            do! Ch.send digger.reqCh (AddCoinsToBuyLicense (wallet |> Seq.truncate maxCoins))
+            return { state with Wallet = wallet |> Seq.skip maxCoins }
         else return state
     }    
     
     let inline processMessage state msg = job {
         match msg with
         | GetCoins digger -> return! sendCoins state digger
-        | LicenseIsBought (licenseCost, license) -> 
-            return 
-                if state.OptimalCost.IsSome then state
-                else
-                    let newState = if state.LicensesCost.ContainsKey licenseCost then state
-                                    else { state with LicensesCost = (state.LicensesCost.Add (licenseCost, license.digAllowed)) }
-                    if newState.LicensesCost |> Map.count >= maxExploreCost then
-                        let (optimalCost, _) = 
-                            newState.LicensesCost 
-                            |> Map.toSeq 
-                            |> Seq.map (fun (cost, digAllowed) -> cost, (float cost / (float digAllowed)))
-                            |> Seq.sortBy (fun (cost, costPerDig) -> costPerDig, cost)
-                            |> Seq.find (fun _ -> true)
-                        Console.WriteLine("optimal cost is " + optimalCost.ToString() + " for " + state.LicensesCost.[optimalCost].ToString() + " time: " + DateTime.Now.ToString())
-                        { newState with OptimalCost = Some optimalCost }
-                    else newState
     }
 
     let rec messageLoop (state: LicensesCostOptimizerState) = job {
         let! msg = Ch.take c.reqCh
         //Console.WriteLine("license: " + DateTime.Now.ToString() + " msg: " + msg.ToString())
         let! newState = processMessage state msg
-        do! timeOutMillis 10
         return! messageLoop newState
     }
     
@@ -410,7 +352,7 @@ let diggingDepthOptimizer (digManCh: DigManCh) = job {
                     Console.WriteLine("optimal is: " + optimalDepth.ToString())
                     do! Ch.send digManCh.reqCh (DiggerOptimalDepthMessage optimalDepth)
 
-                    do! timeOutMillis 60000
+                    do! timeOutMillis 30000
                     do! Ch.send digManCh.reqCh (SetTreasureReport true)
                     return Map.empty
                 else return newTreasuresCost
@@ -453,7 +395,7 @@ let diggersManager (c: DigManCh) (diggers: DiggerCh seq) = job {
     return c
 }
 
-let inline exploreField (explorer: AreaDto -> Job<int>) (timeout: int) (startCoordinates: Coordinates) (endCoordinates: Coordinates) (stepX: int) (stepY: int) = job {
+let inline exploreField (explorer: AreaDto -> Job<int>) (startCoordinates: Coordinates) (endCoordinates: Coordinates) (stepX: int) (stepY: int) = job {
     let maxPosX = endCoordinates.PosX - stepX
     let maxPosY = endCoordinates.PosY - stepY
     let areas = seq {
@@ -485,7 +427,7 @@ let inline game() = job {
     let! diggersManager = diggersManager digManCh diggers
     Console.WriteLine("diggers: " + diggersCount.ToString())
 
-    let explorer = explore diggersManager 3
+    let explorer = explore diggersManager 2
 
     let explorersCount = 14
     Console.WriteLine("explorers count: " + explorersCount.ToString())
@@ -493,7 +435,7 @@ let inline game() = job {
     let step = maxX / explorersCount
     let tasks = [
         for i in 1 .. explorersCount do 
-            exploreField explorer 14 { PosX = (step * i) - step; PosY = 0 } { PosX = step * i; PosY = 3500 } 7 1
+            exploreField explorer { PosX = (step * i) - step; PosY = 0 } { PosX = step * i; PosY = 3500 } 7 1
     ]
 
     do! tasks |> Job.conIgnore
