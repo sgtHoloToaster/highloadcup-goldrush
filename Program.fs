@@ -1,6 +1,4 @@
-﻿// Learn more about F# at http://docs.microsoft.com/dotnet/fsharp
-
-open System
+﻿open System
 open Client
 open System.Net.Http
 open System.Net
@@ -144,9 +142,6 @@ let digger (digManCh: DigManCh) (treasureSender: TreasureSenderCh) (diggingLicen
                 return! job {
                     match licenseUpdateResult with 
                        | Ok newLicense -> 
-                            //if state.ReportLicense && coinsToBuyLicenseCount > 0 then
-                            //    do! Ch.send diggingLicenseCostOptimizer.reqCh (LicenseIsBought(coinsToBuyLicenseCount, newLicense))
-                            
                             if coinsLeft |> Seq.length < 10 then
                                 do! Ch.send diggingLicenseCostOptimizer.reqCh (GetCoins c)
                             return { state with License = Some { Id = newLicense.id; DigAllowed = newLicense.digAllowed; DigUsed = 0 }
@@ -260,14 +255,6 @@ let inline infiniteEnumerator elements =
         | true -> enumerator.Current
         | false -> raise (InvalidOperationException("Infinite enumerator is not infinite"))
 
-let inline createAgents (body: MailboxProcessor<'Msg> -> Async<unit>) agentsCount =
-    [| 1 .. agentsCount|] 
-    |> Seq.map (fun _ -> MailboxProcessor.Start body)
-    |> Seq.toArray
-
-let inline createAgentsPool<'Msg> (body: MailboxProcessor<'Msg> -> Async<unit>) agentsCount = 
-    createAgents body agentsCount |> infiniteEnumerator
-
 let inline generateRange (startNumber: int) (increasePattern: int seq) (endNumber: int) = 
     let enumerator = infiniteEnumerator increasePattern
     let rec increase current = seq {
@@ -327,7 +314,6 @@ let diggingLicensesCostOptimizer (maxExploreCost: int) = job {
 
     let rec messageLoop (state: LicensesCostOptimizerState) = job {
         let! msg = Ch.take c.reqCh
-        //Console.WriteLine("license: " + DateTime.Now.ToString() + " msg: " + msg.ToString())
         let! newState = processMessage state msg
         return! messageLoop newState
     }
@@ -404,12 +390,6 @@ let inline exploreField (explorer: AreaDto -> Job<int>) (startCoordinates: Coord
 
     for area in areas do
         do! explorer area |> Job.Ignore
-        //let! amount = explorer area
-        //do! timeOutMillis (amount * int((Math.Pow(Math.Min(float(area.posX - startCoordinates.PosX), 1.0), 3.0) / 10000.0)))
-        //let timeout = timeout + int (Math.Pow(float(area.posX - startCoordinates.PosX), 2.0)) / 3000
-        //Console.WriteLine("timeout: " + timeout.ToString())
-        //do! Async.Sleep(timeout)
-
 }
 
 let inline game() = job {
@@ -420,7 +400,6 @@ let inline game() = job {
     let! treasureResenderAgent = treasureSender treasureSenderCh diggingDepthOptimizerAgent
     let! diggingLicenseCostOptimizerAgent = diggingLicensesCostOptimizer 50
     let! diggers = [for i in 1 .. diggersCount do  digger digManCh treasureResenderAgent diggingLicenseCostOptimizerAgent] |> Job.conCollect
-    //let diggerAgentsPool = infiniteEnumerator diggers
     let! diggersManager = diggersManager digManCh diggers
 
     let explorer = explore diggersManager 2
